@@ -26,7 +26,7 @@ def fetch_news():
     Obtiene noticias sobre AI, Data Science, Machine Learning y Deep Learning usando NewsAPI.
     """
     url = "https://newsapi.org/v2/everything"
-    query = "AI OR 'Data Science' OR 'Machine Learning' OR 'Deep Learning'"
+    query = "AI OR 'Data Science' OR 'Machine Learning' OR 'Deep Learning' OR 'Artificial Intelligence' OR 'Big Data' OR 'Neural Networks' OR 'Computer Vision' OR 'Natural Language Processing'"
     params = {
         "q": query,
         "language": "en",
