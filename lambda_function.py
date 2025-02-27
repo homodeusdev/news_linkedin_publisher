@@ -1,6 +1,6 @@
 import os
 import requests
-from openai import OpenAI
+import openai
 
 import logging
 from dotenv import load_dotenv
@@ -19,7 +19,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LINKEDIN_ACCESS_TOKEN = os.environ.get("LINKEDIN_ACCESS_TOKEN")
 LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 def fetch_news():
     """
@@ -87,7 +87,7 @@ def summarize_and_rewrite(article):
         "Now, summarize the following news while preserving its meaning:\n\n" + content
     )
     try:
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a professional tech news writer and a millennial machine learning engineer."},
@@ -140,6 +140,9 @@ def main():
         )
         post_to_linkedin_shares(post_content)
 
-if __name__ == "__main__":
-    print("Ejecutando el script principal...")
+def lambda_handler(event, context):
     main()
+    return {
+        "statusCode": 200,
+        "body": "Ejecución finalizada correctamente."
+    }
