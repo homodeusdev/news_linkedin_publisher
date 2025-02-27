@@ -1,0 +1,45 @@
+name: Deploy AWS Lambda
+
+on:
+  push:
+    branches:
+      - main  # Se activará en cada push a la rama "main"
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Clonar el repositorio
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2. Configurar Python
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 3. Instalar Docker (ya viene preinstalado en runners de GitHub Actions, generalmente)
+
+      # 4. Construir la imagen Docker (sin caché para asegurar que se usen los cambios)
+      - name: Build Docker Image
+        run: docker build --no-cache -t lambda-package .
+
+      # 5. Crear un contenedor temporal y extraer el deployment package ZIP
+      - name: Extract deployment package
+        run: |
+          docker create --name temp_container lambda-package
+          docker cp temp_container:/var/task/deployment_package.zip ./deployment_package.zip
+          docker rm temp_container
+          ls -lh deployment_package.zip
+
+      # 6. Desplegar a AWS Lambda usando AWS CLI
+      - name: Deploy to AWS Lambda
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: "us-east-2"
+          LAMBDA_FUNCTION_NAME: "news_linkedin_publisher"
+        run: |
+          aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --zip-file fileb://deployment_package.zip --region $AWS_REGION
