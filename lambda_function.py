@@ -118,11 +118,12 @@ def summarize_and_rewrite(article):
         return article.get('description', 'Not enough content to generate a summary.')
     
     prompt = (
-        "You are an award-winning tech news writer and a 40-year-old millennial machine learning engineer with a casual yet professional tone. "
-        "Generate a highly engaging, bilingual post summarizing the following news. Your output must follow this exact format:\n\n"
-        "[A bold, eye-catching header in English and Spanish]\n\n"
+        "You are a professional tech news writer and a 40-year-old millennial machine learning engineer with a dynamic and engaging style. "
+        "Generate a bilingual post (in English and Spanish) that summarizes the following news, using a creative format with emojis to enhance visual appeal. "
+        "Your output must follow this exact format (do not include any markdown formatting or bold text):\n\n"
+        "Header: [A catchy header: first line in English, second line in Spanish]\n\n"
         "English: [A concise and engaging summary in English]\n\n"
-        "Español: [Un resumen conciso y atractivo en español]\n\n"
+        "Español: [A concise and engaging summary in Spanish]\n\n"
         "SOURCE: [News URL]\n\n"
         "Now, summarize the following news while preserving its meaning:\n\n" + content
     )
