@@ -1,10 +1,10 @@
 import os
 import requests
 import openai
-
 import logging
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
+from datetime import datetime
 
 # Cargar variables de entorno desde .env (para desarrollo local)
 load_dotenv()
@@ -21,12 +21,53 @@ LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
+# Lista de 28 categorías diversas para profesionales en LinkedIn
+CATEGORIES = [
+    "Artificial Intelligence",
+    "Machine Learning",
+    "Data Science",
+    "Big Data",
+    "Deep Learning",
+    "Natural Language Processing",
+    "Computer Vision",
+    "Robotics",
+    "Cybersecurity",
+    "Cloud Computing",
+    "Internet of Things",
+    "Blockchain",
+    "Quantum Computing",
+    "Augmented Reality",
+    "Virtual Reality",
+    "Edge Computing",
+    "Software Development",
+    "DevOps & Automation",
+    "Data Analytics",
+    "FinTech",
+    "HealthTech",
+    "Economy",
+    "Business Strategy",
+    "Digital Marketing",
+    "Green Tech & Sustainability",
+    "Telecommunications",
+    "Gaming & Esports",
+    "Emerging Technologies"
+]
+
+def select_category():
+    """Selecciona una categoría basada en el día del año."""
+    day_of_year = datetime.now().timetuple().tm_yday
+    index = (day_of_year - 1) % len(CATEGORIES)
+    return CATEGORIES[index]
+
 def fetch_news():
     """
-    Obtiene noticias sobre AI, Data Science, Machine Learning y Deep Learning usando NewsAPI.
+    Obtiene noticias usando NewsAPI para la categoría seleccionada del día.
+    Se incluyen palabras clave generales para ampliar el alcance.
     """
+    category = select_category()
+    logger.info(f"Categoría seleccionada para hoy: {category}")
     url = "https://newsapi.org/v2/everything"
-    query = "AI OR 'Data Science' OR 'Machine Learning' OR 'Deep Learning' OR 'Artificial Intelligence' OR 'Big Data' OR 'Neural Networks' OR 'Computer Vision' OR 'Natural Language Processing'"
+    query = f"{category} OR 'Artificial Intelligence' OR 'Data Science' OR 'Machine Learning' OR 'Deep Learning'"
     params = {
         "q": query,
         "language": "en",
@@ -38,7 +79,7 @@ def fetch_news():
     if response.status_code == 200:
         data = response.json()
         articles = data.get("articles", [])
-        logger.info(f"Se encontraron {len(articles)} artículos.")
+        logger.info(f"Se encontraron {len(articles)} artículos para la categoría {category}.")
         return articles
     else:
         logger.error(f"Error al obtener noticias: {response.status_code} {response.text}")
@@ -72,25 +113,29 @@ def fetch_image_for_article(article):
     return None
 
 def summarize_and_rewrite(article):
+    """
+    Genera un post bilingüe (English/Spanish) a partir de la noticia,
+    manteniendo un estilo casual de un millennial cuarentón.
+    El post incluirá un encabezado, un resumen en inglés y un resumen en español.
+    """
     content = f"{article.get('title', '')}\n{article.get('description', '')}"
     if len(content.strip()) < 50:
         return article.get('description', 'Not enough content to generate a summary.')
     
     prompt = (
-        "You are an award-winning tech news writer and a millennial machine learning engineer with a laid-back, casual style. "
-        "Create a highly engaging, visually appealing post in English summarizing the following news about AI, Data Science, "
-        "Machine Learning, or Deep Learning. Use a creative format with the following guidelines:\n\n"
-        "• Use a bold, catchy headline that combines English and Spanish phrases (e.g., 'BREAKING: Amazing Innovation / ¡INCREÍBLE!').\n"
-        "• Follow the headline with a series of bullet points summarizing the key points, using emojis liberally (e.g., 🚀, 🤖, 🔥).\n"
-        "• End the post with an energetic call-to-action and a couple of relevant hashtags (e.g., #TechNews, #MachineLearning).\n\n"
-        "Make sure the tone is fun, energetic, and relaxed, as if you're excitedly sharing cool news with your peers.\n\n"
+        "You are an award-winning tech news writer and a 40-year-old millennial machine learning engineer with a casual, professional tone. "
+        "Generate a highly engaging, bilingual post (in English and Spanish) summarizing the following news. Your output must follow this exact format:\n\n"
+        "HEADER (EN/ES): [A bold, catchy headline in English and Spanish]\n\n"
+        "SUMMARY (EN): [A concise and engaging summary in English]\n\n"
+        "RESUMEN (ES): [A concise and engaging summary in Spanish]\n\n"
+        "SOURCE: [News URL]\n\n"
         "Now, summarize the following news while preserving its meaning:\n\n" + content
     )
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a professional tech news writer and a millennial machine learning engineer."},
+                {"role": "system", "content": "You are a professional tech news writer."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=400,
@@ -135,7 +180,6 @@ def main():
         post_content = (
             f"{article.get('title')}\n\n"
             f"{summary}\n\n"
-            #f"Image: {image_url if image_url else 'No image found'}\n\n"
             f"Fuente: {article.get('url')}"
         )
         post_to_linkedin_shares(post_content)
