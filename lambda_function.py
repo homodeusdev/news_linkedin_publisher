@@ -67,7 +67,7 @@ def fetch_news():
     category = select_category()
     logger.info(f"Categoría seleccionada para hoy: {category}")
     url = "https://newsapi.org/v2/everything"
-    query = f"{category} OR 'Artificial Intelligence' OR 'Data Science' OR 'Machine Learning' OR 'Deep Learning'"
+    query = f"{category}"
     params = {
         "q": query,
         "language": "en",
