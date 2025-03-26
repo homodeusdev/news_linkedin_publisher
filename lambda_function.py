@@ -120,8 +120,8 @@ def summarize_and_rewrite(article):
     prompt = (
         "You are an award-winning tech news writer and a 40-year-old millennial machine learning engineer with a dynamic, engaging style. "
         "Generate a highly engaging, bilingual post (in English and Spanish) summarizing the following news. "
-        "Your output must follow this exact format (do not include the labels 'Header:' or 'SOURCE:'):\n\n"
-        "[A catchy header in English and Spanish separated by a slash]\n\n"
+        "Your output must follow this exact format (do not include the labels 'Header:' or 'SOURCE:') and include appropriate emojis to make the post eye-catching:\n\n"
+        "A catchy header in English and Spanish separated by a slash\n\n"
         "English: [A concise and engaging summary in English]\n\n"
         "Español: [A concise and engaging summary in Spanish]\n\n"
         "Now, summarize the following news while preserving its meaning:\n\n" + content
