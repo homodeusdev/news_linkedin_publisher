@@ -133,7 +133,7 @@ def summarize_and_rewrite(article):
                 {"role": "system", "content": "You are a professional tech news writer."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=400,
+            max_tokens=600,
             temperature=0.7
         )
         summary = response.choices[0].message.content.strip()
