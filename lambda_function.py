@@ -113,21 +113,16 @@ def fetch_image_for_article(article):
     return None
 
 def summarize_and_rewrite(article):
-    """
-    Genera un post bilingüe (English/Spanish) a partir de la noticia,
-    manteniendo un estilo casual de un millennial cuarentón.
-    El post incluirá un encabezado, un resumen en inglés y un resumen en español.
-    """
     content = f"{article.get('title', '')}\n{article.get('description', '')}"
     if len(content.strip()) < 50:
         return article.get('description', 'Not enough content to generate a summary.')
     
     prompt = (
-        "You are an award-winning tech news writer and a 40-year-old millennial machine learning engineer with a casual, professional tone. "
-        "Generate a highly engaging, bilingual post (in English and Spanish) summarizing the following news. Your output must follow this exact format:\n\n"
-        "HEADER (EN/ES): [A bold, catchy headline in English and Spanish]\n\n"
-        "SUMMARY (EN): [A concise and engaging summary in English]\n\n"
-        "RESUMEN (ES): [A concise and engaging summary in Spanish]\n\n"
+        "You are an award-winning tech news writer and a 40-year-old millennial machine learning engineer with a casual yet professional tone. "
+        "Generate a highly engaging, bilingual post summarizing the following news. Your output must follow this exact format:\n\n"
+        "[A bold, eye-catching header in English and Spanish]\n\n"
+        "English: [A concise and engaging summary in English]\n\n"
+        "Español: [Un resumen conciso y atractivo en español]\n\n"
         "SOURCE: [News URL]\n\n"
         "Now, summarize the following news while preserving its meaning:\n\n" + content
     )
@@ -138,7 +133,7 @@ def summarize_and_rewrite(article):
                 {"role": "system", "content": "You are a professional tech news writer."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=600,
+            max_tokens=400,
             temperature=0.7
         )
         summary = response.choices[0].message.content.strip()
