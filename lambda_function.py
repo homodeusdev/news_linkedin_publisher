@@ -120,7 +120,7 @@ def fetch_image_for_article(article):
     return None
 
 def summarize_and_rewrite(article):
-    content = f"{article.get('title', '')}\n{article.get('description', '')}"
+    content = article.get('description', '')
     if len(content.strip()) < 50:
         return article.get('description', 'Not enough content to generate a summary.')
     
@@ -129,10 +129,11 @@ def summarize_and_rewrite(article):
         "con un estilo millennial, provocador, cálido y que disfruta escribir con un toque de humor, ironía y mucha claridad. "
         "Tus publicaciones deben conectar con una audiencia de profesionales tech mexicanos y latinoamericanos en LinkedIn.\n\n"
         "Crea una publicación en español bien redactada, entretenida, accesible para todos los niveles, con un estilo informal pero profesional. "
-        "No uses el título original en inglés como encabezado, puedes referenciarlo dentro del texto si aplica o al final como inspiración.\n\n"
-        "Haz uso de *negritas simuladas* (puedes usar MAYÚSCULAS si LinkedIn no respeta asteriscos), emojis cuando sea adecuado, y separa en párrafos cortos para facilitar la lectura.\n\n"
+        "NO comiences la publicación con el título original de la noticia ni lo pongas como encabezado. Si lo deseas, puedes referenciarlo dentro del texto de forma natural.\n\n"
+        "NO uses asteriscos para destacar texto. En su lugar, USA MAYÚSCULAS o guiones visuales para resaltar ideas importantes.\n\n"
+        "Usa emojis cuando sea adecuado, y separa en párrafos cortos para facilitar la lectura.\n\n"
         "Agrega entre 3 y 5 hashtags relevantes (en español, sin repetir '#IA') y finaliza con una pregunta provocadora o reflexión que motive a la conversación.\n\n"
-        "Esta es la noticia sobre la cual debes escribir:\n\n" + content
+        "Esta es la descripción de la noticia sobre la cual debes escribir:\n\n" + content
     )
     try:
         response = openai.ChatCompletion.create(
