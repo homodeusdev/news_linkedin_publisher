@@ -9,10 +9,6 @@ from datetime import datetime
 # Cargar variables de entorno desde .env (para desarrollo local)
 load_dotenv()
 
-# Configuración de logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # Obtener claves y tokens desde variables de entorno
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -21,36 +17,46 @@ LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-# Lista de 28 categorías diversas para profesionales en LinkedIn
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Rotación temática semanal de categorías para publicaciones
 CATEGORIES = [
+    # Semana 1 - Inteligencia Artificial y automatización
     "Artificial Intelligence",
     "Machine Learning",
-    "Data Science",
-    "Big Data",
     "Deep Learning",
     "Natural Language Processing",
     "Computer Vision",
+    "Generative AI",
+    "Prompt Engineering",
+
+    # Semana 2 - Aplicaciones de IA y Ética
+    "AI Agents & Automation",
+    "AI Ethics & Regulation",
+    "Human-AI Interaction",
     "Robotics",
-    "Cybersecurity",
-    "Cloud Computing",
-    "Internet of Things",
-    "Blockchain",
+    "Business Strategy in AI Era",
+    "Green Tech with AI",
+
+    # Semana 3 - Ciencia y Tecnología Emergente
+    "Scientific Breakthroughs",
     "Quantum Computing",
-    "Augmented Reality",
-    "Virtual Reality",
-    "Edge Computing",
-    "Software Development",
-    "DevOps & Automation",
-    "Data Analytics",
+    "Neuroscience & AI",
+    "Emerging Technologies",
+    "Cloud Computing",
+    "Edge AI",
+    "Tech Policy & Regulation",
+
+    # Semana 4 - Fintech y economía digital
     "FinTech",
+    "InsurTech",
     "HealthTech",
-    "Economy",
-    "Business Strategy",
-    "Digital Marketing",
-    "Green Tech & Sustainability",
-    "Telecommunications",
-    "Gaming & Esports",
-    "Emerging Technologies"
+    "RegTech",
+    "Cybersecurity",
+    "Blockchain",
+    "AI Startups & Innovation"
 ]
 
 def select_category():
@@ -88,9 +94,9 @@ def fetch_news():
 def fetch_image_for_article(article):
     """
     Busca una imagen alusiva para la noticia usando Unsplash API, basándose en el título.
-    Devuelve la URL de la imagen, o None si no se encuentra.
+    Devuelve un diccionario con la URL de la imagen y el nombre del autor, o None si no se encuentra.
     """
-    search_query = article.get("title", "")
+    search_query = f"minimalist {article.get('title', '')}"
     url = "https://api.unsplash.com/search/photos"
     params = {
          "query": search_query,
@@ -107,7 +113,8 @@ def fetch_image_for_article(article):
          results = data.get("results", [])
          if results:
               image_url = results[0].get("urls", {}).get("regular", "")
-              return image_url
+              author_name = results[0].get("user", {}).get("name", "")
+              return {"image_url": image_url, "author_name": author_name}
     else:
          logger.error(f"Error al buscar imagen en Unsplash: {response.status_code} {response.text}")
     return None
@@ -118,13 +125,16 @@ def summarize_and_rewrite(article):
         return article.get('description', 'Not enough content to generate a summary.')
     
     prompt = (
-        "You are an award-winning tech news writer and a 40-year-old millennial machine learning engineer with a dynamic, engaging style. "
-        "Generate a highly engaging, bilingual post (in English and Spanish) summarizing the following news. "
-        "Your output must follow this exact format (do not include the labels 'Header:' or 'SOURCE:') and include appropriate emojis to make the post eye-catching:\n\n"
-        "== A catchy header in English and Spanish separated by a slash and uppercase ==\n\n"
-        "English: [A concise and engaging summary in English]\n\n"
-        "Español: [A concise and engaging summary in Spanish]\n\n"
-        "Now, summarize the following news while preserving its meaning:\n\n" + content
+        "Eres un escritor galardonado de noticias tecnológicas, ingeniero en inteligencia artificial de 40 años, "
+        "millennial, con un estilo dinámico, accesible y con amor por la buena escritura. "
+        "Genera una publicación en español, entretenida, bien escrita y accesible para lectores de todos los niveles. "
+        "El tono debe ser cálido, curioso, con un toque de humor, sin perder el rigor. Usa emojis si es apropiado, "
+        "hazla interesante, con contexto, y que dé pie a la conversación en LinkedIn.\n\n"
+        "Agrega al final del texto entre 3 y 5 hashtags relevantes sobre el tema (en español y sin '#IA' repetido), "
+        "y una pregunta abierta o llamado a la reflexión para invitar a la conversación.\n\n"
+        "Utiliza *negritas* (con asteriscos) para destacar ideas clave y saltos de línea estratégicos para mejorar la lectura.\n\n"
+        "No traduzcas, no resumas brevemente. Desarrolla un pequeño texto como si estuvieras compartiendo la noticia con tus colegas en LinkedIn.\n\n"
+        "Esta es la noticia sobre la cual debes escribir:\n\n" + content
     )
     try:
         response = openai.ChatCompletion.create(
@@ -142,7 +152,7 @@ def summarize_and_rewrite(article):
         print(f"Error al resumir el artículo: {e}")
         return "Error generating summary 😢."
 
-def post_to_linkedin_shares(content):
+def post_to_linkedin_shares(content, image_url=None):
     print(content)
 
     url = "https://api.linkedin.com/v2/shares"
@@ -152,10 +162,20 @@ def post_to_linkedin_shares(content):
     }
     payload = {
         "owner": f"urn:li:person:{LINKEDIN_PERSON_ID}",
-        "text": {
-            "text": content
-        }
+        "text": {"text": content}
     }
+
+    if image_url:
+        payload["content"] = {
+            "contentEntities": [
+                {
+                    "entityLocation": image_url,
+                    "thumbnails": [{"resolvedUrl": image_url}]
+                }
+            ],
+            "title": "Imagen relacionada"
+        }
+
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 201:
         logger.info("Publicación en LinkedIn (Shares) realizada con éxito ✅.")
@@ -175,10 +195,12 @@ def main():
         post_content = (
             f"{article.get('title')}\n\n"
             f"{summary}\n\n"
-            f"Category: {article.get('category')}\n\n"
             f"Fuente: {article.get('url')}"
         )
-        post_to_linkedin_shares(post_content)
+        image_info = fetch_image_for_article(article)
+        image_url = image_info["image_url"] if image_info else None
+        author_credit = f"\n📸 Imagen de {image_info['author_name']} vía Unsplash" if image_info and image_info.get("author_name") else ""
+        post_to_linkedin_shares(post_content + author_credit, image_url=image_url)
 
 def lambda_handler(event, context):
     main()
