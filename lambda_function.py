@@ -17,9 +17,23 @@ LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
+
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Archivo temporal para artículos publicados en Lambda
+PUBLISHED_ARTICLES_FILE = "/tmp/published_articles.txt"
+
+def is_already_published(url):
+    if not os.path.exists(PUBLISHED_ARTICLES_FILE):
+        return False
+    with open(PUBLISHED_ARTICLES_FILE, "r") as f:
+        return url.strip() in [line.strip() for line in f.readlines()]
+
+def mark_as_published(url):
+    with open(PUBLISHED_ARTICLES_FILE, "a") as f:
+        f.write(url.strip() + "\n")
 
 # Rotación temática semanal de categorías para publicaciones
 CATEGORIES = [
@@ -90,6 +104,28 @@ def fetch_news():
     else:
         logger.error(f"Error al obtener noticias: {response.status_code} {response.text}")
         return []
+
+import feedparser
+
+def fetch_news_google_rss():
+    """
+    Obtiene noticias usando Google News RSS para la categoría del día en español.
+    Solo se usa esta fuente si es domingo.
+    """
+    category = select_category()
+    logger.info(f"[RSS] Categoría seleccionada para hoy: {category}")
+    query = category.replace(" ", "+")
+    rss_url = f"https://news.google.com/rss/search?q={query}&hl=es-419&gl=MX&ceid=MX:es"
+    feed = feedparser.parse(rss_url)
+    articles = []
+    for entry in feed.entries[:5]:
+        articles.append({
+            "title": entry.title,
+            "description": entry.summary,
+            "url": entry.link
+        })
+    logger.info(f"[RSS] Se encontraron {len(articles)} artículos en RSS para la categoría {category}.")
+    return articles
 
 def fetch_image_for_article(article):
     """
@@ -182,13 +218,21 @@ def post_to_linkedin_shares(content, image_url=None):
         logger.error(f"Error al publicar en LinkedIn (Shares): {response.status_code} {response.text}")
 
 def main():
-    articles = fetch_news()
+    # Si es domingo, usa RSS
+    if datetime.now().weekday() == 6:
+        articles = fetch_news_google_rss()
+    else:
+        articles = fetch_news()
     print(articles)
     if not articles:
         logger.info("No se encontraron artículos para procesar.")
         return
 
     for article in articles:
+        url = article.get("url")
+        if is_already_published(url):
+            logger.info(f"Artículo ya publicado, se omite: {url}")
+            continue
         logger.info(f"Procesando artículo: {article.get('title')}")
         summary = summarize_and_rewrite(article)
         post_content = (
@@ -200,6 +244,7 @@ def main():
         image_url = image_info["image_url"] if image_info else None
         author_credit = f"\n📸 Imagen de {image_info['author_name']} vía Unsplash" if image_info and image_info.get("author_name") else ""
         post_to_linkedin_shares(post_content + author_credit, image_url=image_url)
+        mark_as_published(url)
 
 def lambda_handler(event, context):
     main()
