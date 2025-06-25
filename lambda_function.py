@@ -105,28 +105,6 @@ def fetch_news():
         logger.error(f"Error al obtener noticias: {response.status_code} {response.text}")
         return []
 
-import feedparser
-
-def fetch_news_google_rss():
-    """
-    Obtiene noticias usando Google News RSS para la categoría del día en español.
-    Solo se usa esta fuente si es domingo.
-    """
-    category = select_category()
-    logger.info(f"[RSS] Categoría seleccionada para hoy: {category}")
-    query = category.replace(" ", "+")
-    rss_url = f"https://news.google.com/rss/search?q={query}&hl=es-419&gl=MX&ceid=MX:es"
-    feed = feedparser.parse(rss_url)
-    articles = []
-    for entry in feed.entries[:5]:
-        articles.append({
-            "title": entry.title,
-            "description": entry.summary,
-            "url": entry.link
-        })
-    logger.info(f"[RSS] Se encontraron {len(articles)} artículos en RSS para la categoría {category}.")
-    return articles
-
 def fetch_image_for_article(article):
     """
     Busca una imagen alusiva para la noticia usando Unsplash API, basándose en el título.
@@ -218,11 +196,7 @@ def post_to_linkedin_shares(content, image_url=None):
         logger.error(f"Error al publicar en LinkedIn (Shares): {response.status_code} {response.text}")
 
 def main():
-    # Si es domingo, usa RSS
-    if datetime.now().weekday() == 6:
-        articles = fetch_news_google_rss()
-    else:
-        articles = fetch_news()
+    articles = fetch_news()
     print(articles)
     if not articles:
         logger.info("No se encontraron artículos para procesar.")
