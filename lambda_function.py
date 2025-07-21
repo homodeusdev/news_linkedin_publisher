@@ -170,24 +170,33 @@ def upload_image_to_linkedin(image_bytes: bytes) -> str:
 
 
 def post_to_linkedin_ugc(text: str, image_urn: Optional[str] = None, alt_text: Optional[str] = None) -> str:
-    share_media_category = "NONE" if image_urn is None else "IMAGE"
-    media_block = []
+    """
+    Publica un UGC Post nativo. Si image_urn es None, publica un texto sin adjunto;
+    si se provee una imagen, la agrega con alt‑text.
+    """
     if image_urn:
-        media_block.append({
-            "status": "READY",
-            "media": image_urn,
-            "altText": alt_text or ""
-        })
+        share_content = {
+            "shareCommentary": {"text": text},
+            "shareMediaCategory": "IMAGE",
+            "media": [
+                {
+                    "status": "READY",
+                    "media": image_urn,
+                    "altText": alt_text or ""
+                }
+            ]
+        }
+    else:
+        share_content = {
+            "shareCommentary": {"text": text},
+            "shareMediaCategory": "NONE"
+        }
 
     body = {
         "author": f"urn:li:person:{LINKEDIN_PERSON_ID}",
         "lifecycleState": "PUBLISHED",
         "specificContent": {
-            "com.linkedin.ugc.ShareContent": {
-                "shareCommentary": {"text": text},
-                "shareMediaCategory": share_media_category,
-                "media": media_block
-            }
+            "com.linkedin.ugc.ShareContent": share_content
         },
         "visibility": {
             "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
