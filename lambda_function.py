@@ -145,11 +145,11 @@ def download_image(image_url: str) -> bytes:
     return response.content
 
 
-def upload_image_to_linkedin(image_bytes: bytes, alt_text: str) -> str:
+def upload_image_to_linkedin(image_bytes: bytes) -> str:
+    # Per Images API, only the owner field is allowed in initializeUploadRequest.
     init_body = {
         "initializeUploadRequest": {
-            "owner": f"urn:li:person:{LINKEDIN_PERSON_ID}",
-            "altText": alt_text[:4000]
+            "owner": f"urn:li:person:{LINKEDIN_PERSON_ID}"
         }
     }
     init_res = requests.post(
@@ -287,7 +287,7 @@ def main():
         image_urn = None
         if image_url:
             img_bytes = download_image(image_url)
-            image_urn = upload_image_to_linkedin(img_bytes, alt_text)
+            image_urn = upload_image_to_linkedin(img_bytes)
 
         # Publish the UGC post
         ugc_urn = post_to_linkedin_ugc(post_content + author_credit, image_urn, alt_text)
