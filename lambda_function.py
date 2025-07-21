@@ -3,7 +3,6 @@ import requests
 import openai
 import logging
 from dotenv import load_dotenv
-from bs4 import BeautifulSoup
 from datetime import datetime
 
 # Cargar variables de entorno desde .env (para desarrollo local)
@@ -17,6 +16,12 @@ LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
+LINKEDIN_VERSION = "202506"
+HEADERS_LI = {
+    "Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
+    "LinkedIn-Version": LINKEDIN_VERSION,
+    "X-Restli-Protocol-Version": "2.0.0"
+}
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -133,6 +138,79 @@ def fetch_image_for_article(article):
          logger.error(f"Error al buscar imagen en Unsplash: {response.status_code} {response.text}")
     return None
 
+def download_image(image_url: str) -> bytes:
+    response = requests.get(image_url, timeout=10)
+    response.raise_for_status()
+    return response.content
+
+
+def upload_image_to_linkedin(image_bytes: bytes, alt_text: str) -> str:
+    init_body = {
+        "initializeUploadRequest": {
+            "owner": f"urn:li:person:{LINKEDIN_PERSON_ID}",
+            "altText": alt_text[:4000]
+        }
+    }
+    init_res = requests.post(
+        "https://api.linkedin.com/rest/images?action=initializeUpload",
+        headers=HEADERS_LI,
+        json=init_body,
+        timeout=10
+    )
+    init_res.raise_for_status()
+    data = init_res.json()["value"]
+    upload_url = data["uploadUrl"]
+    image_urn = data["image"]
+
+    put_headers = {"Content-Type": "application/octet-stream"}
+    put = requests.put(upload_url, headers=put_headers, data=image_bytes, timeout=30)
+    put.raise_for_status()
+    return image_urn
+
+
+def post_to_linkedin_ugc(text: str, image_urn: str | None, alt_text: str | None) -> str:
+    share_media_category = "NONE" if image_urn is None else "IMAGE"
+    media_block = []
+    if image_urn:
+        media_block.append({
+            "status": "READY",
+            "media": image_urn,
+            "altText": alt_text or ""
+        })
+
+    body = {
+        "author": f"urn:li:person:{LINKEDIN_PERSON_ID}",
+        "lifecycleState": "PUBLISHED",
+        "specificContent": {
+            "com.linkedin.ugc.ShareContent": {
+                "shareCommentary": {"text": text},
+                "shareMediaCategory": share_media_category,
+                "media": media_block
+            }
+        },
+        "visibility": {
+            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+        }
+    }
+    res = requests.post(
+        "https://api.linkedin.com/v2/ugcPosts",
+        headers=HEADERS_LI,
+        json=body,
+        timeout=10
+    )
+    res.raise_for_status()
+    return res.json()["id"]
+
+
+def comment_with_link(ugc_urn: str, url: str):
+    payload = {
+        "actor": f"urn:li:person:{LINKEDIN_PERSON_ID}",
+        "message": {"text": url}
+    }
+    comments_url = f"https://api.linkedin.com/v2/socialActions/{ugc_urn}/comments"
+    res = requests.post(comments_url, headers=HEADERS_LI, json=payload, timeout=10)
+    res.raise_for_status()
+
 def summarize_and_rewrite(article):
     content = article.get('description', '')
     if len(content.strip()) < 50:
@@ -165,36 +243,6 @@ def summarize_and_rewrite(article):
         print(f"Error al resumir el artículo: {e}")
         return "Error generating summary 😢."
 
-def post_to_linkedin_shares(content, image_url=None):
-    print(content)
-
-    url = "https://api.linkedin.com/v2/shares"
-    headers = {
-        "Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "owner": f"urn:li:person:{LINKEDIN_PERSON_ID}",
-        "text": {"text": content}
-    }
-
-    if image_url:
-        payload["content"] = {
-            "contentEntities": [
-                {
-                    "entityLocation": image_url,
-                    "thumbnails": [{"resolvedUrl": image_url}]
-                }
-            ],
-            "title": "Imagen relacionada"
-        }
-
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 201:
-        logger.info("Publicación en LinkedIn (Shares) realizada con éxito ✅.")
-    else:
-        logger.error(f"Error al publicar en LinkedIn (Shares): {response.status_code} {response.text}")
-
 def main():
     articles = fetch_news()
     print(articles)
@@ -216,8 +264,36 @@ def main():
         )
         image_info = fetch_image_for_article(article)
         image_url = image_info["image_url"] if image_info else None
-        author_credit = f"\n📸 Imagen de {image_info['author_name']} vía Unsplash" if image_info and image_info.get("author_name") else ""
-        post_to_linkedin_shares(post_content + author_credit, image_url=image_url)
+        author_credit = (
+            f"\n📸 Imagen de {image_info['author_name']} vía Unsplash"
+            if image_info and image_info.get("author_name") else ""
+        )
+
+        # Generate alt‑text
+        alt_prompt = (
+            f"Describe brevemente (≤120 caracteres) la imagen para un público tech latino: "
+            f"{article.get('title')}"
+        )
+        alt_response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": alt_prompt}],
+            max_tokens=60,
+            temperature=0.4
+        )
+        alt_text = alt_response.choices[0].message.content.strip()
+
+        # Upload image if present
+        image_urn = None
+        if image_url:
+            img_bytes = download_image(image_url)
+            image_urn = upload_image_to_linkedin(img_bytes, alt_text)
+
+        # Publish the UGC post
+        ugc_urn = post_to_linkedin_ugc(post_content + author_credit, image_urn, alt_text)
+
+        # Add original link in the first comment
+        comment_with_link(ugc_urn, article.get("url"))
+
         mark_as_published(url)
 
 def lambda_handler(event, context):
