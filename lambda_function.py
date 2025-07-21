@@ -143,10 +143,11 @@ def summarize_and_rewrite(article):
         "con un estilo millennial, provocador, cálido y que disfruta escribir con un toque de humor, ironía y mucha claridad. "
         "Tus publicaciones deben conectar con una audiencia de profesionales tech mexicanos y latinoamericanos en LinkedIn.\n\n"
         "Crea una publicación en español bien redactada, entretenida, accesible para todos los niveles, con un estilo informal pero profesional. "
-        "NO comiences la publicación con el título original de la noticia ni lo pongas como encabezado. Si lo deseas, puedes referenciarlo dentro del texto de forma natural.\n\n"
+        "Comienza con un GANCHO de máximo dos líneas (pregunta retadora, dato impactante o chiste) para atrapar la atención.\n\n"
+        "NO comiences la publicación con el título original de la noticia ni lo pongas como encabezado; si lo deseas, intégralo de forma natural dentro del texto. \n\n"
         "NO uses asteriscos para destacar texto. En su lugar, USA MAYÚSCULAS o guiones visuales para resaltar ideas importantes.\n\n"
         "Usa emojis cuando sea adecuado, y separa en párrafos cortos para facilitar la lectura.\n\n"
-        "Agrega entre 3 y 5 hashtags relevantes (en español, sin repetir '#IA') y finaliza con una pregunta provocadora o reflexión que motive a la conversación.\n\n"
+        "Genera EXACTAMENTE entre 3 y 5 hashtags relevantes en español (sin repetir '#IA') y finaliza con una pregunta provocadora o reflexión que motive a la conversación.\n\n"
         "Esta es la descripción de la noticia sobre la cual debes escribir:\n\n" + content
     )
     try:
@@ -183,7 +184,8 @@ def post_to_linkedin_shares(content, image_url=None):
             "contentEntities": [
                 {
                     "entityLocation": image_url,
-                    "thumbnails": [{"resolvedUrl": image_url}]
+                    "thumbnails": [{"resolvedUrl": image_url}],
+                    "altText": "Imagen alusiva a la noticia"
                 }
             ],
             "title": "Imagen relacionada"
@@ -210,9 +212,8 @@ def main():
         logger.info(f"Procesando artículo: {article.get('title')}")
         summary = summarize_and_rewrite(article)
         post_content = (
-            f"{article.get('title')}\n\n"
             f"{summary}\n\n"
-            f"Fuente: {article.get('url')}"
+            f"Fuente 👉 {article.get('url')}"
         )
         image_info = fetch_image_for_article(article)
         image_url = image_info["image_url"] if image_info else None
