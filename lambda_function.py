@@ -15,7 +15,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LINKEDIN_ACCESS_TOKEN = os.environ.get("LINKEDIN_ACCESS_TOKEN")
 LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
 
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
 LINKEDIN_VERSION = "202506"
 HEADERS_LI = {
@@ -35,7 +35,7 @@ def is_already_published(url):
     if not os.path.exists(PUBLISHED_ARTICLES_FILE):
         return False
     with open(PUBLISHED_ARTICLES_FILE, "r") as f:
-        return url.strip() in [line.strip() for line in f.readlines()]
+        return url.strip() in (line.strip() for line in f)
 
 def mark_as_published(url):
     with open(PUBLISHED_ARTICLES_FILE, "a") as f:
@@ -88,65 +88,57 @@ def select_category():
 def fetch_news():
     """
     Obtiene noticias usando NewsAPI para la categoría seleccionada del día.
-    Se incluyen palabras clave generales para ampliar el alcance.
     """
     category = select_category()
     logger.info(f"Categoría seleccionada para hoy: {category}")
     url = "https://newsapi.org/v2/everything"
-    query = f"{category}"
     params = {
-        "q": query,
+        "q": category,
         "language": "en",
         "sortBy": "relevancy",
         "apiKey": NEWSAPI_KEY,
         "pageSize": 5
     }
-    response = requests.get(url, params=params)
-    if response.status_code == 200:
-        data = response.json()
-        articles = data.get("articles", [])
-        logger.info(f"Se encontraron {len(articles)} artículos para la categoría {category}.")
+    resp = requests.get(url, params=params)
+    if resp.status_code == 200:
+        articles = resp.json().get("articles", [])
+        logger.info(f"Se encontraron {len(articles)} artículos.")
         return articles
     else:
-        logger.error(f"Error al obtener noticias: {response.status_code} {response.text}")
+        logger.error(f"Error al obtener noticias: {resp.status_code} {resp.text}")
         return []
 
 def fetch_image_for_article(article):
     """
-    Busca una imagen alusiva para la noticia usando Unsplash API, basándose en el título.
-    Devuelve un diccionario con la URL de la imagen y el nombre del autor, o None si no se encuentra.
+    Busca una imagen alusiva para la noticia usando Unsplash API.
     """
-    search_query = f"minimalist {article.get('title', '')}"
+    query = f"minimalist {article.get('title','')}"
     url = "https://api.unsplash.com/search/photos"
-    params = {
-         "query": search_query,
-         "per_page": 1
-    }
-    unsplash_key = os.environ.get("UNSPLASH_ACCESS_KEY")
-    if not unsplash_key:
-        logger.error("UNSPLASH_ACCESS_KEY no está configurado en las variables de entorno.")
+    key = os.environ.get("UNSPLASH_ACCESS_KEY")
+    if not key:
+        logger.error("UNSPLASH_ACCESS_KEY no configurado.")
         return None
-    headers = {"Authorization": f"Client-ID {unsplash_key}"}
-    response = requests.get(url, params=params, headers=headers)
-    if response.status_code == 200:
-         data = response.json()
-         results = data.get("results", [])
-         if results:
-              image_url = results[0].get("urls", {}).get("regular", "")
-              author_name = results[0].get("user", {}).get("name", "")
-              return {"image_url": image_url, "author_name": author_name}
+    headers = {"Authorization": f"Client-ID {key}"}
+    resp = requests.get(url, params={"query": query, "per_page":1}, headers=headers)
+    if resp.status_code == 200:
+        results = resp.json().get("results", [])
+        if results:
+            img = results[0]
+            return {
+                "image_url": img["urls"]["regular"],
+                "author_name": img["user"]["name"]
+            }
     else:
-         logger.error(f"Error al buscar imagen en Unsplash: {response.status_code} {response.text}")
+        logger.error(f"Error Unsplash: {resp.status_code} {resp.text}")
     return None
 
 def download_image(image_url: str) -> bytes:
-    response = requests.get(image_url, timeout=10)
-    response.raise_for_status()
-    return response.content
-
+    resp = requests.get(image_url, timeout=10)
+    resp.raise_for_status()
+    return resp.content
 
 def upload_image_to_linkedin(image_bytes: bytes) -> str:
-    # Per Images API, only the owner field is allowed in initializeUploadRequest.
+    # Inicializa upload (solo owner permitido)
     init_body = {
         "initializeUploadRequest": {
             "owner": f"urn:li:person:{LINKEDIN_PERSON_ID}"
@@ -163,27 +155,23 @@ def upload_image_to_linkedin(image_bytes: bytes) -> str:
     upload_url = data["uploadUrl"]
     image_urn = data["image"]
 
+    # Subida binaria
     put_headers = {"Content-Type": "application/octet-stream"}
     put = requests.put(upload_url, headers=put_headers, data=image_bytes, timeout=30)
     put.raise_for_status()
     return image_urn
 
-
-def post_to_linkedin_ugc(text: str, image_urn: Optional[str] = None, alt_text: Optional[str] = None) -> str:
+def post_to_linkedin_ugc(text: str, image_urn: Optional[str] = None) -> str:
     """
-    Publica un UGC Post nativo. Si image_urn es None, publica un texto sin adjunto;
-    si se provee una imagen, la agrega con alt‑text.
+    Publica un UGC Post. Si image_urn es None → solo texto;
+    si image_urn existe → adjunta la imagen.
     """
     if image_urn:
         share_content = {
             "shareCommentary": {"text": text},
             "shareMediaCategory": "IMAGE",
             "media": [
-                {
-                    "status": "READY",
-                    "media": image_urn,
-                    "altText": alt_text or ""
-                }
+                {"status": "READY", "media": image_urn}
             ]
         }
     else:
@@ -202,15 +190,20 @@ def post_to_linkedin_ugc(text: str, image_urn: Optional[str] = None, alt_text: O
             "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
         }
     }
+
+    headers = {**HEADERS_LI, "Content-Type": "application/json"}
     res = requests.post(
         "https://api.linkedin.com/v2/ugcPosts",
-        headers=HEADERS_LI,
+        headers=headers,
         json=body,
         timeout=10
     )
-    res.raise_for_status()
+    try:
+        res.raise_for_status()
+    except requests.HTTPError:
+        logger.error(f"UGC error {res.status_code}: {res.text}")
+        raise
     return res.json()["id"]
-
 
 def comment_with_link(ugc_urn: str, url: str):
     payload = {
@@ -222,10 +215,9 @@ def comment_with_link(ugc_urn: str, url: str):
     res.raise_for_status()
 
 def summarize_and_rewrite(article):
-    content = article.get('description', '')
-    if len(content.strip()) < 50:
-        return article.get('description', 'Not enough content to generate a summary.')
-    
+    content = article.get("description","")
+    if len(content) < 50:
+        return content or "Not enough content to summarize."
     prompt = (
         "Eres un escritor galardonado de noticias tecnológicas, mexicano, ingeniero en inteligencia artificial de 40 años, "
         "con un estilo millennial, provocador, cálido y que disfruta escribir con un toque de humor, ironía y mucha claridad. "
@@ -237,78 +229,44 @@ def summarize_and_rewrite(article):
         "Agrega entre 3 y 5 hashtags relevantes (en español, sin repetir '#IA') y finaliza con una pregunta provocadora o reflexión que motive a la conversación.\n\n"
         "Esta es la descripción de la noticia sobre la cual debes escribir:\n\n" + content
     )
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a professional tech news writer."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=600,
-            temperature=0.7
-        )
-        summary = response.choices[0].message.content.strip()
-        return summary
-    except Exception as e:
-        print(f"Error al resumir el artículo: {e}")
-        return "Error generating summary 😢."
+    resp = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role":"user","content":prompt}],
+        max_tokens=600,
+        temperature=0.7
+    )
+    return resp.choices[0].message.content.strip()
 
 def main():
     articles = fetch_news()
-    print(articles)
     if not articles:
-        logger.info("No se encontraron artículos para procesar.")
+        logger.info("No hay artículos.")
         return
 
     for article in articles:
         url = article.get("url")
         if is_already_published(url):
-            logger.info(f"Artículo ya publicado, se omite: {url}")
             continue
-        logger.info(f"Procesando artículo: {article.get('title')}")
+
         summary = summarize_and_rewrite(article)
         post_content = (
             f"{article.get('title')}\n\n"
             f"{summary}\n\n"
             "Link en el primer comentario 👇"
         )
-        image_info = fetch_image_for_article(article)
-        image_url = image_info["image_url"] if image_info else None
-        author_credit = (
-            f"\n📸 Imagen de {image_info['author_name']} vía Unsplash"
-            if image_info and image_info.get("author_name") else ""
-        )
 
-        # Generate alt‑text
-        alt_prompt = (
-            f"Describe brevemente (<=120 caracteres) la imagen para un público tech latino: "
-            f"{article.get('title')}"
-        )
-        alt_response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": alt_prompt}],
-            max_tokens=60,
-            temperature=0.4
-        )
-        alt_text = alt_response.choices[0].message.content.strip()
-
-        # Upload image if present
+        img_info = fetch_image_for_article(article)
         image_urn = None
-        if image_url:
-            img_bytes = download_image(image_url)
+        author_credit = ""
+        if img_info:
+            img_bytes = download_image(img_info["image_url"])
             image_urn = upload_image_to_linkedin(img_bytes)
+            author_credit = f"\n📸 Imagen de {img_info['author_name']} vía Unsplash"
 
-        # Publish the UGC post
-        ugc_urn = post_to_linkedin_ugc(post_content + author_credit, image_urn, alt_text)
-
-        # Add original link in the first comment
-        comment_with_link(ugc_urn, article.get("url"))
-
+        ugc_urn = post_to_linkedin_ugc(post_content + author_credit, image_urn)
+        comment_with_link(ugc_urn, url)
         mark_as_published(url)
 
 def lambda_handler(event, context):
     main()
-    return {
-        "statusCode": 200,
-        "body": "Ejecución finalizada correctamente."
-    }
+    return {"statusCode": 200, "body": "Ejecución finalizada correctamente."}
