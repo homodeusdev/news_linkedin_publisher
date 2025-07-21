@@ -142,12 +142,14 @@ def summarize_and_rewrite(article):
         "Eres un escritor galardonado de noticias tecnológicas, mexicano, ingeniero en inteligencia artificial de 40 años, "
         "con un estilo millennial, provocador, cálido y que disfruta escribir con un toque de humor, ironía y mucha claridad. "
         "Tus publicaciones deben conectar con una audiencia de profesionales tech mexicanos y latinoamericanos en LinkedIn.\n\n"
-        "Crea una publicación en español bien redactada, entretenida, accesible para todos los niveles, con un estilo informal pero profesional. "
-        "Comienza con un GANCHO de máximo dos líneas (pregunta retadora, dato impactante o chiste) para atrapar la atención.\n\n"
-        "NO comiences la publicación con el título original de la noticia ni lo pongas como encabezado; si lo deseas, intégralo de forma natural dentro del texto. \n\n"
-        "NO uses asteriscos para destacar texto. En su lugar, USA MAYÚSCULAS o guiones visuales para resaltar ideas importantes.\n\n"
-        "Usa emojis cuando sea adecuado, y separa en párrafos cortos para facilitar la lectura.\n\n"
-        "Genera EXACTAMENTE entre 3 y 5 hashtags relevantes en español (sin repetir '#IA') y finaliza con una pregunta provocadora o reflexión que motive a la conversación.\n\n"
+        "📌 OBJETIVO: Generar un post de entre 1 200 y 2 000 caracteres (200‑300 palabras) que mantenga la atención y fomente conversación.\n\n"
+        "1️⃣ Comienza con un GANCHO de máximo dos líneas (pregunta retadora, dato impactante o chiste) para atrapar al lector.\n"
+        "2️⃣ Desarrolla la historia en párrafos cortos (3‑5 ideas clave) usando emojis y MAYÚSCULAS o guiones visuales para resaltar puntos.\n"
+        "3️⃣ Incluye UNO O DOS datos concretos (estadísticas, cifras o citas) antes del cierre, ya sea en párrafo aparte o en bullets.\n"
+        "4️⃣ Finaliza con una pregunta provocadora que invite a comentar.\n\n"
+        "NO comiences el texto con el título original de la noticia ni lo pongas como encabezado; si lo deseas, intégralo de forma natural dentro del cuerpo.\n"
+        "NO uses asteriscos para destacar texto. Evita tecnicismos excesivos; busca claridad.\n\n"
+        "Genera EXACTAMENTE entre 3 y 5 hashtags relevantes en español (sin repetir '#IA') colocados al final del post, en la misma línea.\n\n"
         "Esta es la descripción de la noticia sobre la cual debes escribir:\n\n" + content
     )
     try:
@@ -157,7 +159,7 @@ def summarize_and_rewrite(article):
                 {"role": "system", "content": "You are a professional tech news writer."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=600,
+            max_tokens=1000,
             temperature=0.7
         )
         summary = response.choices[0].message.content.strip()
