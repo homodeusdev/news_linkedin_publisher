@@ -4,6 +4,7 @@ import openai
 import logging
 from dotenv import load_dotenv
 from datetime import datetime
+from typing import Optional
 
 # Cargar variables de entorno desde .env (para desarrollo local)
 load_dotenv()
@@ -168,7 +169,7 @@ def upload_image_to_linkedin(image_bytes: bytes, alt_text: str) -> str:
     return image_urn
 
 
-def post_to_linkedin_ugc(text: str, image_urn: str | None, alt_text: str | None) -> str:
+def post_to_linkedin_ugc(text: str, image_urn: Optional[str] = None, alt_text: Optional[str] = None) -> str:
     share_media_category = "NONE" if image_urn is None else "IMAGE"
     media_block = []
     if image_urn:
@@ -260,7 +261,7 @@ def main():
         post_content = (
             f"{article.get('title')}\n\n"
             f"{summary}\n\n"
-            f"Fuente: {article.get('url')}"
+            "Link en el primer comentario 👇"
         )
         image_info = fetch_image_for_article(article)
         image_url = image_info["image_url"] if image_info else None
@@ -271,7 +272,7 @@ def main():
 
         # Generate alt‑text
         alt_prompt = (
-            f"Describe brevemente (≤120 caracteres) la imagen para un público tech latino: "
+            f"Describe brevemente (<=120 caracteres) la imagen para un público tech latino: "
             f"{article.get('title')}"
         )
         alt_response = openai.ChatCompletion.create(
