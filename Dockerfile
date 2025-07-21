@@ -1,4 +1,4 @@
-FROM public.ecr.aws/lambda/python:3.9
+FROM public.ecr.aws/lambda/python:3.11
 
 RUN pip install poetry
 RUN poetry self add poetry-plugin-export
