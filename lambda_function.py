@@ -8,6 +8,8 @@ import random
 import json
 import re
 from typing import List
+import io
+from fpdf import FPDF
 
 # Cargar variables de entorno desde .env (para desarrollo local)
 load_dotenv()
@@ -266,30 +268,103 @@ def controversy_score(article: dict) -> int:
     hits = sum(1 for kw in CONTROVERSY_KEYWORDS if kw.lower() in full_text)
     return min(hits, 5)
 
-def generate_poll(summary: str) -> tuple[str, List[str]]:
+# ----------  PDF Carousel helpers  ----------
+def generate_slides(summary: str) -> List[dict]:
     """
-    Use OpenAI to generate a poll question and 3‑4 short options.
-    Falls back to a default poll if parsing fails.
+    Devuelve lista de slides [{'title': str, 'points': [str, ...]}]
     """
-    poll_prompt = (
-        "Devuelve en JSON con keys 'question' y 'options' (lista de 3‑4 elementos ≤30 caracteres) "
-        "una encuesta para LinkedIn basada en este texto:\n\n" + summary
+    prompt = (
+        "Divide el siguiente texto en un carrusel de 4 slides para LinkedIn. "
+        "Cada slide debe tener un 'title' (≤40 caracteres) y 3 bullets (≤60 caracteres cada uno). "
+        "Devuélvelo en JSON: [{'title': str, 'points': [str, str, str]}]\n\n"
+        + summary[:1200]
     )
     try:
+        import json as _json
         res = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": poll_prompt}],
-            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
             temperature=0.7
         )
-        match = re.search(r'\{.*\}', res.choices[0].message.content, re.S)
-        data = json.loads(match.group(0)) if match else {}
-        question = data.get("question") or "¿Qué opinas?"
-        options = data.get("options") or ["Sí", "No", "Tal vez"]
+        return _json.loads(res.choices[0].message.content)
     except Exception as e:
-        logger.error(f"Error generando poll: {e}")
-        question, options = "¿Qué opinas?", ["Sí", "No", "Tal vez"]
-    return question, options[:4]
+        logger.error(f"GPT slides fallback: {e}")
+        return [
+            {"title": "Resumen", "points": [summary[:100], "...", "..."]},
+            {"title": "Datos clave", "points": ["…", "…", "…"]},
+            {"title": "Impacto", "points": ["…", "…", "…"]},
+            {"title": "Y ahora…", "points": ["¿Qué opinas?", "", ""]}
+        ]
+
+class CarouselPDF(FPDF):
+    def header(self):
+        pass  # no automatic header
+
+def build_pdf(slides: List[dict]) -> bytes:
+    pdf = CarouselPDF(orientation="P", unit="pt", format="LETTER")
+    pdf.set_auto_page_break(auto=False)
+    for slide in slides:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 24)
+        pdf.multi_cell(0, 40, slide["title"], align="L")
+        pdf.ln(10)
+        pdf.set_font("Helvetica", "", 14)
+        for pt in slide["points"]:
+            if pt:
+                pdf.multi_cell(0, 18, u"• " + pt, align="L")
+                pdf.ln(4)
+    buffer = io.BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()
+
+def register_pdf_asset(pdf_bytes: bytes) -> str:
+    url = "https://api.linkedin.com/v2/assets?action=registerUpload"
+    headers = {
+        "Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+        "LinkedIn-Version": "202506",
+        "X-Restli-Protocol-Version": "2.0.0"
+    }
+    payload = {
+        "registerUploadRequest": {
+            "owner": f"urn:li:person:{LINKEDIN_PERSON_ID}",
+            "recipes": ["urn:li:digitalmediaRecipe:feedshare-document"],
+            "serviceRelationships": [{
+                "relationshipType": "OWNER",
+                "identifier": "urn:li:userGeneratedContent"
+            }],
+            "supportedUploadMechanism": ["SYNCHRONOUS_UPLOAD"]
+        }
+    }
+    res = requests.post(url, headers=headers, json=payload).json()
+    upload_url = res["value"]["uploadMechanism"]["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]["uploadUrl"]
+    asset_urn = res["value"]["asset"]
+    up_headers = {"Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
+                  "Content-Type": "application/pdf"}
+    requests.put(upload_url, headers=up_headers, data=pdf_bytes).raise_for_status()
+    return asset_urn
+
+def post_document(asset_urn: str, commentary: str):
+    url = "https://api.linkedin.com/rest/posts"
+    headers = {
+        "Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+        "LinkedIn-Version": "202506",
+        "X-Restli-Protocol-Version": "2.0.0"
+    }
+    payload = {
+        "author": f"urn:li:person:{LINKEDIN_PERSON_ID}",
+        "commentary": commentary,
+        "visibility": "PUBLIC",
+        "lifecycleState": "PUBLISHED",
+        "content": {"document": {"asset": asset_urn}}
+    }
+    res = requests.post(url, headers=headers, json=payload)
+    if res.status_code == 201:
+        logger.info("Carrusel PDF publicado con éxito ✅")
+    else:
+        logger.error(f"Error publicando carrusel: {res.status_code} {res.text}")
 
 def post_to_linkedin_poll(commentary: str, poll_question: str, poll_options: List[str]):
     url = "https://api.linkedin.com/rest/posts"
@@ -373,9 +448,9 @@ def main():
     if not processed:
         return
 
-    # Selecciona aleatoriamente una noticia para convertirla en encuesta
-    poll_tuple = random.choice(processed)
-    poll_art = poll_tuple[1]  # artículo que será usado para la poll
+    # Selecciona SIEMPRE el primer artículo para convertirlo en carrusel PDF (config temporal)
+    carousel_tuple = processed[0]
+    carousel_art = carousel_tuple[1]
 
     for score, art, summary, img_info in processed:
         content = f"{summary}\n\nFuente 👉 {art['url']}"
@@ -383,10 +458,17 @@ def main():
             f"\n📸 Imagen de {img_info['author_name']} vía Unsplash"
             if img_info and img_info.get("author_name") else ""
         )
-        if art == poll_art:
-            # Publica encuesta
-            q, opts = generate_poll(summary)
-            post_to_linkedin_poll(content, q, opts)
+        if art == carousel_art:
+            # Construir y publicar carrusel PDF
+            try:
+                slides = generate_slides(summary)
+                pdf_bytes = build_pdf(slides)
+                asset = register_pdf_asset(pdf_bytes)
+                post_document(asset, content + author_credit)
+            except Exception as e:
+                logger.error(f"Fallo carrusel, publico share tradicional: {e}")
+                img_url = img_info.get("image_url") if img_info else None
+                post_to_linkedin_shares(content + author_credit, image_url=img_url)
         else:
             # Publica share normal
             img_url = img_info.get("image_url") if img_info else None
