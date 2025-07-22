@@ -373,9 +373,9 @@ def main():
     if not processed:
         return
 
-    # Selecciona la noticia con mayor controversia
-    top_tuple = max(processed, key=lambda x: x[0])
-    top_score, top_art, top_summary, top_img = top_tuple
+    # Selecciona aleatoriamente una noticia para convertirla en encuesta
+    poll_tuple = random.choice(processed)
+    poll_art = poll_tuple[1]  # artículo que será usado para la poll
 
     for score, art, summary, img_info in processed:
         content = f"{summary}\n\nFuente 👉 {art['url']}"
@@ -383,7 +383,7 @@ def main():
             f"\n📸 Imagen de {img_info['author_name']} vía Unsplash"
             if img_info and img_info.get("author_name") else ""
         )
-        if art == top_art and score > 0:
+        if art == poll_art:
             # Publica encuesta
             q, opts = generate_poll(summary)
             post_to_linkedin_poll(content, q, opts)
