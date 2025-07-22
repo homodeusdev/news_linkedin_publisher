@@ -5,6 +5,9 @@ import logging
 from dotenv import load_dotenv
 from datetime import datetime
 import random
+import json
+import re
+from typing import List
 
 # Cargar variables de entorno desde .env (para desarrollo local)
 load_dotenv()
@@ -88,6 +91,55 @@ CATEGORY_BLOCKS = [
         "CNBV Regulación",
         "Startups Financieras MX",
     ],
+]
+
+# Palabras gatillo para calcular controversy_score
+CONTROVERSY_KEYWORDS = [
+
+    # Bloque 1 – IA y Automatización
+    "sesgo", "bias",
+    "desempleo", "job loss", "layoff", "automation layoffs",
+    "deepfake", "deep fake",
+    "killer robot", "killer robots",
+    "privacy", "privacidad", "vigilancia", "surveillance",
+    "copyright", "plagio", "lawsuit", "demanda",
+    "monopolio", "monopoly",
+    "agencia reguladora", "regulatory body",
+    "AGI", "superinteligencia",
+    "data leak", "filtración de datos",
+
+    # Bloque 2 – Aplicaciones de IA, Ética y Robots
+    "ética", "ethics", "regulación", "regulation", "barrera legal",
+    "responsabilidad", "liability",
+    "malfunction", "accidente", "fatal", "fatality",
+    "robots reemplazan", "robots replace",
+
+    # Bloque 3 – Tech emergente y ciencia
+    "breakthrough controvertido",
+    "quantum threat", "breaking encryption", "cripto-quiebre",
+    "biohack", "bio-hacking", "edición genética", "gene editing",
+    "neuromarketing", "implante cerebral", "brain implant",
+    "colapso", "catástrofe", "catastrophic", "existential risk",
+
+    # Bloque 4 – FinTech global y economía digital
+    "fraude", "fraud", "phishing", "estafa", "scam",
+    "hack", "breach", "data breach",
+    "ransomware", "secuestro de datos",
+    "lavado de dinero", "money laundering",
+    "multas", "fine", "penalty",
+    "bancarrota", "bankruptcy", "chapter 11",
+    "burbuja", "bubble", "crash", "colapso bursátil",
+    "regulación SEC", "SEC lawsuit", "KYC fail",
+
+    # Bloque 5 – Economía y FinTech en México
+    "CNBV", "Banxico", "superpeso", "devaluación", "inflación", "inflation",
+    "alza de tasas", "raise rates", "tasa de interés", "interest rate",
+    "moratoria", "default", "impago",
+    "corrupción", "corrupcion",
+    "fraude piramidal", "esquema ponzi", "ponzi scheme",
+    "apagón bancario", "bank outage",
+    "ciberataque", "cyberattack",
+    "reforma fiscal", "tax reform"
 ]
 
 def select_category():
@@ -205,6 +257,72 @@ def summarize_and_rewrite(article):
         logger.error(f"Error al resumir el artículo: {e}")
         return "Error generating summary 😢."
 
+def controversy_score(article: dict) -> int:
+    """
+    Returns a score 0‑5 based on how many controversy keywords appear
+    in the title or description.
+    """
+    full_text = (article.get("title", "") + " " + article.get("description", "")).lower()
+    hits = sum(1 for kw in CONTROVERSY_KEYWORDS if kw.lower() in full_text)
+    return min(hits, 5)
+
+def generate_poll(summary: str) -> tuple[str, List[str]]:
+    """
+    Use OpenAI to generate a poll question and 3‑4 short options.
+    Falls back to a default poll if parsing fails.
+    """
+    poll_prompt = (
+        "Devuelve en JSON con keys 'question' y 'options' (lista de 3‑4 elementos ≤30 caracteres) "
+        "una encuesta para LinkedIn basada en este texto:\n\n" + summary
+    )
+    try:
+        res = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": poll_prompt}],
+            max_tokens=150,
+            temperature=0.7
+        )
+        match = re.search(r'\{.*\}', res.choices[0].message.content, re.S)
+        data = json.loads(match.group(0)) if match else {}
+        question = data.get("question") or "¿Qué opinas?"
+        options = data.get("options") or ["Sí", "No", "Tal vez"]
+    except Exception as e:
+        logger.error(f"Error generando poll: {e}")
+        question, options = "¿Qué opinas?", ["Sí", "No", "Tal vez"]
+    return question, options[:4]
+
+def post_to_linkedin_poll(commentary: str, poll_question: str, poll_options: List[str]):
+    url = "https://api.linkedin.com/rest/posts"
+    headers = {
+        "Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+        "LinkedIn-Version": "202506",
+        "X-Restli-Protocol-Version": "2.0.0"
+    }
+    payload = {
+        "author": f"urn:li:person:{LINKEDIN_PERSON_ID}",
+        "commentary": commentary,
+        "visibility": "PUBLIC",
+        "distribution": {
+            "feedDistribution": "MAIN_FEED",
+            "targetEntities": [],
+            "thirdPartyDistributionChannels": []
+        },
+        "lifecycleState": "PUBLISHED",
+        "content": {
+            "poll": {
+                "question": poll_question,
+                "options": [{"text": opt[:30]} for opt in poll_options],
+                "settings": {"duration": "THREE_DAYS"}
+            }
+        }
+    }
+    res = requests.post(url, headers=headers, json=payload)
+    if res.status_code == 201:
+        logger.info("Encuesta publicada con éxito ✅")
+    else:
+        logger.error(f"Error publicando encuesta: {res.status_code} {res.text}")
+
 def post_to_linkedin_shares(content, image_url=None):
     logger.info(f"Preparando publicación: {content[:100]}...")
 
@@ -240,25 +358,41 @@ def main():
     articles = fetch_news()
     logger.info(f"Artículos obtenidos: {len(articles) if articles else 0}")
     if not articles:
-        logger.info("No se encontraron artículos para procesar.")
         return
 
-    for article in articles:
-        url = article.get("url")
-        if is_already_published(url):
-            logger.info(f"Artículo ya publicado, se omite: {url}")
+    processed = []  # list of tuples (score, article, summary, image_info)
+    for art in articles:
+        if is_already_published(art["url"]):
+            logger.info(f"Artículo ya publicado, se omite: {art['url']}")
             continue
-        logger.info(f"Procesando artículo: {article.get('title')}")
-        summary = summarize_and_rewrite(article)
-        post_content = (
-            f"{summary}\n\n"
-            f"Fuente 👉 {article.get('url')}"
+        summary = summarize_and_rewrite(art)
+        score = controversy_score(art)
+        img_info = fetch_image_for_article(art)
+        processed.append((score, art, summary, img_info))
+
+    if not processed:
+        return
+
+    # Selecciona la noticia con mayor controversia
+    top_tuple = max(processed, key=lambda x: x[0])
+    top_score, top_art, top_summary, top_img = top_tuple
+
+    for score, art, summary, img_info in processed:
+        content = f"{summary}\n\nFuente 👉 {art['url']}"
+        author_credit = (
+            f"\n📸 Imagen de {img_info['author_name']} vía Unsplash"
+            if img_info and img_info.get("author_name") else ""
         )
-        image_info = fetch_image_for_article(article)
-        image_url = image_info.get("image_url") if image_info else None
-        author_credit = f"\n📸 Imagen de {image_info['author_name']} vía Unsplash" if image_info and image_info.get("author_name") else ""
-        post_to_linkedin_shares(post_content + author_credit, image_url=image_url)
-        mark_as_published(url)
+        if art == top_art and score > 0:
+            # Publica encuesta
+            q, opts = generate_poll(summary)
+            post_to_linkedin_poll(content, q, opts)
+        else:
+            # Publica share normal
+            img_url = img_info.get("image_url") if img_info else None
+            post_to_linkedin_shares(content + author_credit, image_url=img_url)
+
+        mark_as_published(art["url"])
 
 def lambda_handler(event, context):
     main()
