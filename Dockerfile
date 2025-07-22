@@ -8,6 +8,7 @@ WORKDIR /var/task
 
 COPY pyproject.toml poetry.lock* ./
 RUN poetry export -f requirements.txt --without-hashes -o requirements.txt
+RUN pip install --upgrade pip
 RUN pip install -r requirements.txt -t .
 
 COPY lambda_function.py ./
