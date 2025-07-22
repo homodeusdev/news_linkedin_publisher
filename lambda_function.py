@@ -1,6 +1,6 @@
 import os
 import requests
-from openai import OpenAI
+import openai
 import logging
 from dotenv import load_dotenv
 from datetime import datetime
@@ -15,8 +15,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LINKEDIN_ACCESS_TOKEN = os.environ.get("LINKEDIN_ACCESS_TOKEN")
 LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 
 # Configuración de logging
@@ -191,7 +190,7 @@ def summarize_and_rewrite(article):
         "Esta es la descripción de la noticia sobre la cual debes escribir:\n\n" + content
     )
     try:
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a professional tech news writer."},
