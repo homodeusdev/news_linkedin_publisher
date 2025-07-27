@@ -8,25 +8,30 @@ This AWS Lambda-powered bot automatically:
 - 🔍 **Curates** trending tech news using NewsAPI with smart category rotation
 - ✨ **Transforms** articles into engaging Spanish content using OpenAI GPT
 - 🖼️ **Enhances** posts with relevant images from Unsplash
-- 📱 **Publishes** directly to LinkedIn with proper formatting and links
-- 🔄 **Rotates** through 28 tech categories on a weekly cycle
+- 📱 **Publishes** directly to LinkedIn with multiple formats (posts, polls, carousels)
+- 🔄 **Rotates** through 35+ tech categories organized in 5 weekly blocks
+- 🇲🇽 **Prioritizes** Mexican financial sources for local FinTech content
+- 📊 **Generates** interactive polls and PDF carousels automatically
+- 🎯 **Scores** content controversy to optimize engagement
 - 📝 **Prevents** duplicate posts with intelligent tracking
 
 ## 🏗️ Architecture
 
 ```
-NewsAPI → Content Curation → GPT Processing → Unsplash Images → LinkedIn Publishing
-   ↓              ↓               ↓              ↓              ↓
-Category      AI Rewriting    Image Search   Post Creation   Comment Link
-Rotation      (Spanish)       & Upload       with Media      Addition
+NewsAPI → Content Curation → GPT Processing → Format Selection → LinkedIn Publishing
+   ↓              ↓               ↓                  ↓                ↓
+Category      AI Rewriting    Controversy        📑 PDF Carousel   📱 Regular Post
+Rotation      (Spanish)       Scoring           📊 Interactive Poll  🖼️ Image Post  
+              🇲🇽 MX Sources   Image Search      🎯 Smart Targeting   💬 Comments
 ```
 
 ## 🛠️ Tech Stack
 
 - **Runtime**: Python 3.11+ (AWS Lambda)
-- **APIs**: LinkedIn v2, OpenAI GPT-3.5, NewsAPI, Unsplash
+- **APIs**: LinkedIn v2, OpenAI GPT-3.5/GPT-4, NewsAPI, Unsplash
 - **Deployment**: Docker + GitHub Actions
 - **Dependencies**: Poetry for package management
+- **Document Generation**: FPDF2 for PDF carousels
 
 ## 📋 Requirements
 
@@ -101,23 +106,38 @@ aws lambda update-function-code \
 ## 🎯 Features
 
 ### 🔄 Smart Category Rotation
-28 carefully curated tech categories rotating weekly:
-- **Week 1**: AI & Machine Learning Focus
-- **Week 2**: AI Applications & Ethics  
-- **Week 3**: Emerging Technologies
-- **Week 4**: FinTech & Digital Economy
+35+ carefully curated tech categories organized in 5 daily blocks:
+- **Monday**: AI & Machine Learning (Artificial Intelligence, Deep Learning, NLP, Computer Vision, Generative AI, Prompt Engineering)
+- **Tuesday**: AI Applications & Ethics (AI Agents, AI Ethics, Human-AI Interaction, Robotics, Business Strategy, Green Tech)
+- **Wednesday**: Emerging Technologies (Scientific Breakthroughs, Quantum Computing, Neuroscience, Cloud Computing, Edge AI)
+- **Thursday**: Global FinTech (FinTech, InsurTech, HealthTech, RegTech, Cybersecurity, Blockchain, AI Startups)
+- **Friday**: Mexican Economy & FinTech (Economía México, FinTech México, Pagos Digitales MX, Banca Digital, CNBV Regulación)
 
 ### 🤖 AI-Powered Content Generation
-- Transforms English tech news into engaging Spanish content
-- Maintains professional yet approachable tone
-- Adds relevant emojis and hashtags
+- Transforms English tech news into engaging Spanish content (GPT-3.5)
+- Maintains professional yet approachable millennial tone
+- Generates 1,200-2,000 character posts optimized for LinkedIn
+- Adds relevant emojis and 3-5 Spanish hashtags
 - Includes thought-provoking questions for engagement
+- Special prompting for Mexican FinTech impact analysis
 
-### 📸 Visual Enhancement
-- Automatic image search based on article content
-- Proper attribution to Unsplash photographers
-- AI-generated alt text for accessibility
-- Optimized for LinkedIn's image requirements
+### 📊 Multi-Format Publishing
+- **📑 PDF Carousels**: Automatically converts first article into 4-slide PDF document
+- **🗳️ Interactive Polls**: GPT-4 generates provocative questions with 4 smart options (3-day duration)
+- **🖼️ Image Posts**: Traditional posts with Unsplash images and author attribution
+- **🎯 Smart Distribution**: 50% of articles become polls, first article becomes carousel
+
+### 🇲🇽 Mexican Content Prioritization
+- Auto-detects Mexico/FinTech MX topics from category names
+- Prioritizes Mexican financial sources: El Financiero, Expansión, Forbes MX, El Economista
+- Spanish-language news search for local content
+- CNBV regulation and Mexican financial ecosystem focus
+
+### 📈 Controversy Scoring System
+- Analyzes titles and descriptions for 45+ controversy keywords
+- Organized by business category (AI bias, job loss, privacy, fraud, regulation)
+- 0-5 score system to optimize engagement potential
+- Keywords include: "sesgo", "desempleo", "deepfake", "fraude", "CNBV", "regulación"
 
 ### 🛡️ Duplicate Prevention
 - Tracks published articles in `/tmp/published_articles.txt`
@@ -126,33 +146,44 @@ aws lambda update-function-code \
 
 ## 📱 LinkedIn Integration
 
-### Post Structure
-1. **Main Post**: Article title + AI-generated summary + author credit
-2. **First Comment**: Original article link (to avoid algorithm penalties)
-3. **Image**: Relevant visual with proper alt text
-4. **Hashtags**: 3-5 relevant Spanish tech hashtags
+### Post Types & Structure
+1. **📑 PDF Carousel Posts**: 4-slide documents with titles (≤40 chars) and bullet points (≤60 chars)
+2. **🗳️ Poll Posts**: Interactive surveys with provocative questions and 4 distinct options
+3. **🖼️ Image Posts**: Traditional posts with Unsplash visuals and photographer attribution
+4. **All Posts Include**: Source link, relevant emojis, 3-5 Spanish hashtags
 
 ### API Compatibility
-- Uses LinkedIn v2 API
-- Implements UGC (User Generated Content) endpoints
-- Supports both text and image posts
-- Proper error handling and retries
+- Uses LinkedIn v2 API with latest version headers (202506)
+- Implements multiple endpoints: /v2/shares, /rest/posts, /v2/assets
+- Document upload system for PDF carousels
+- Poll creation with 3-day duration settings
+- UGC (User Generated Content) endpoints
+- Proper error handling and fallback mechanisms
 
 ## 🔧 Configuration
 
 ### Category Customization
-Modify the `CATEGORIES` list in `lambda_function.py` to adjust topics:
+Modify the `CATEGORY_BLOCKS` list in `lambda_function.py` to adjust daily topic rotation:
 
 ```python
-CATEGORIES = [
-    "Artificial Intelligence",
-    "Machine Learning", 
-    # Add your categories...
+CATEGORY_BLOCKS = [
+    # Monday - AI & ML Block
+    ["Artificial Intelligence", "Machine Learning", "Deep Learning"],
+    # Tuesday - AI Applications
+    ["AI Agents & Automation", "AI Ethics & Regulation"],
+    # ... customize your 5 daily blocks
 ]
 ```
 
 ### Content Style Adjustment
-Customize the GPT prompt in `summarize_and_rewrite()` function to match your voice and audience.
+- **Main Content**: Customize GPT-3.5 prompt in `summarize_and_rewrite()` (line 231)
+- **Poll Generation**: Adjust GPT-4 prompt in `generate_dynamic_poll()` (line 491)
+- **PDF Slides**: Modify slide structure in `generate_slides()` (line 276)
+
+### Format Distribution
+- **PDF Carousels**: Always first article (hardcoded in `main()` line 452)
+- **Polls**: 50% of remaining articles (`num_polls = len(processed) // 2`)
+- **Regular Posts**: Remaining articles with images
 
 ## 🏃‍♂️ Local Development
 
@@ -177,9 +208,11 @@ aws logs tail /aws/lambda/news_linkedin_publisher --follow
 
 ### Success Metrics
 - Articles processed per execution
-- Successful LinkedIn posts
-- API rate limit usage
+- Successful LinkedIn posts by format (regular/poll/carousel)
+- Controversy scores and engagement correlation
+- API rate limit usage (NewsAPI, OpenAI, LinkedIn, Unsplash)
 - Error rates and types
+- Mexican vs global content distribution
 
 ## 🚨 Troubleshooting
 
@@ -193,9 +226,14 @@ poetry export -f requirements.txt --without-hashes -o build/requirements.txt
 **API Rate Limits**: 
 - NewsAPI: 1000 requests/day (free tier)
 - LinkedIn: 500 posts/day per person
-- OpenAI: Varies by plan
+- OpenAI: Varies by plan (GPT-3.5 + GPT-4 usage)
+- Unsplash: 50 requests/hour (free tier)
 
-**Lambda Timeouts**: Increase timeout for image processing (recommended: 5 minutes)
+**PDF Generation Issues**: 
+- FPDF2 encoding problems with special characters
+- Large PDF upload failures (check LinkedIn asset limits)
+
+**Lambda Timeouts**: Increase timeout for PDF generation and image processing (recommended: 5 minutes)
 
 ## 🤝 Contributing
 

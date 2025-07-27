@@ -452,12 +452,20 @@ def main():
     carousel_tuple = processed[0]
     carousel_art = carousel_tuple[1]
 
+    num_polls = len(processed) // 2
+    poll_candidates = random.sample(processed, num_polls) if len(processed) > 1 else []
+
     for score, art, summary, img_info in processed:
         content = f"{summary}\n\nFuente 👉 {art['url']}"
         author_credit = (
             f"\n📸 Imagen de {img_info['author_name']} vía Unsplash"
             if img_info and img_info.get("author_name") else ""
         )
+        if (score, art, summary, img_info) in poll_candidates:
+            poll_question, poll_options = generate_dynamic_poll(summary)
+            post_to_linkedin_poll(content + author_credit, poll_question, poll_options)
+            mark_as_published(art["url"])
+            continue
         if art == carousel_art:
             # Construir y publicar carrusel PDF
             try:
@@ -475,6 +483,42 @@ def main():
             post_to_linkedin_shares(content + author_credit, image_url=img_url)
 
         mark_as_published(art["url"])
+
+def generate_dynamic_poll(summary: str) -> tuple[str, List[str]]:
+    """
+    Usa OpenAI para generar una pregunta provocadora tipo encuesta y 4 opciones de respuesta.
+    """
+    prompt = (
+        "Eres un estratega de contenido para LinkedIn con enfoque en noticias tech, economía y controversias actuales. "
+        "Dado el siguiente resumen de una noticia, genera una pregunta provocadora tipo encuesta para la audiencia profesional latinoamericana. "
+        "La pregunta debe invitar al debate o a la reflexión.\n\n"
+        "➡️ Usa un tono informal, profesional y que conecte con millennials y Gen Z. Incluye 1 o 2 emojis si ayudan a reforzar el tono o mensaje.\n"
+        "➡️ Las 4 opciones de respuesta deben ser breves, claras, distintas entre sí, y sin repetir sí/no obvios. Pueden tener un toque irónico, directo o picante.\n\n"
+        "Formato de salida estrictamente en JSON como este:\n"
+        "{\n"
+        "  \"question\": \"¿Cuál es tu opinión sobre X?\",\n"
+        "  \"options\": [\"Opción A\", \"Opción B\", \"Opción C\", \"Opción D\"]\n"
+        "}\n\n"
+        f"Resumen de la noticia:\n{summary}"
+    )
+    try:
+        import json as _json
+        res = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            temperature=0.8
+        )
+        poll_data = _json.loads(res.choices[0].message.content)
+        question = poll_data.get("question", "¿Qué opinas sobre esta noticia?")
+        options = poll_data.get("options", ["Interesante", "Preocupante", "Exagerado", "Necesita más contexto"])
+        return question, options
+    except Exception as e:
+        logger.error(f"Error generando encuesta dinámica con OpenAI: {e}")
+        return (
+            "¿Qué opinas sobre esta noticia?",
+            ["Interesante", "Preocupante", "Exagerado", "Necesita más contexto"]
+        )
 
 def lambda_handler(event, context):
     main()
