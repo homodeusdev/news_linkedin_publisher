@@ -7,7 +7,7 @@ from datetime import datetime
 import random
 import json
 import re
-from typing import List
+from typing import List, Union, Optional
 import io
 from fpdf import FPDF
 
@@ -161,7 +161,7 @@ PRO_INTEREST_MX = [
 # --- NewsAPI biased fetch: MX/global, dedup, controversy/interest rank ---
 from math import ceil
 
-def _newsapi_query(query: str, language: str, page_size: int, domains: str | None = None):
+def _newsapi_query(query: str, language: str, page_size: int, domains: Optional[str] = None):
     url = "https://newsapi.org/v2/everything"
     params = {
         "q": query,
