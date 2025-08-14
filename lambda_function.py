@@ -19,6 +19,7 @@ NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LINKEDIN_ACCESS_TOKEN = os.environ.get("LINKEDIN_ACCESS_TOKEN")
 LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
+TOTAL_ARTICLES = int(os.environ.get("TOTAL_ARTICLES", "8"))  # cantidad objetivo por corrida
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
@@ -95,7 +96,7 @@ CATEGORY_BLOCKS = [
     ],
 ]
 
-# Palabras gatillo para calcular controversy_score
+ # Palabras gatillo para calcular controversy_score
 CONTROVERSY_KEYWORDS = [
 
     # Bloque 1 – IA y Automatización
@@ -144,12 +145,97 @@ CONTROVERSY_KEYWORDS = [
     "reforma fiscal", "tax reform"
 ]
 
+# Tópicos de interés para profesionistas en MX (para priorización)
+PRO_INTEREST_MX = [
+    # Economía/empleo
+    "salarios", "inflación", "impuestos", "ISR", "IVA", "nearshoring", "empleo calificado",
+    # Finanzas/Banca/Crédito
+    "crédito", "tarjetas", "buró de crédito", "CNBV", "Banxico", "fintech", "banca digital",
+    # Tecnología/Regulación/Privacidad
+    "datos personales", "privacidad", "ciberseguridad", "regulación", "ley fintech",
+    # Sectores relevantes MX
+    "telecom", "AMLO", "gasolina", "energía", "Pemex", "CFE", "startups", "inversión",
+]
+
+
+# --- NewsAPI biased fetch: MX/global, dedup, controversy/interest rank ---
+from math import ceil
+
+def _newsapi_query(query: str, language: str, page_size: int, domains: str | None = None):
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": query,
+        "language": language,
+        "sortBy": "relevancy",
+        "apiKey": NEWSAPI_KEY,
+        "pageSize": page_size
+    }
+    if domains:
+        params["domains"] = domains
+    resp = requests.get(url, params=params)
+    if resp.status_code != 200:
+        logger.error(f"NewsAPI error {resp.status_code}: {resp.text}")
+        return []
+    return resp.json().get("articles", [])
+
+
+def _rank_score(article: dict) -> int:
+    # Controversia base
+    c = controversy_score(article)
+    # Bonificación si contiene palabras clave de interés profesional MX
+    text = (article.get("title", "") + " " + article.get("description", "")).lower()
+    bonus = sum(1 for kw in PRO_INTEREST_MX if kw.lower() in text)
+    return c * 2 + min(bonus, 3)  # dar más peso a controversia
+
+
+def fetch_news_biased(total: int = TOTAL_ARTICLES):
+    """Obtiene un set mixto garantizando ~60% MX y ~40% global, priorizando temas polémicos para profesionistas.
+    Devuelve lista de artículos (dict) deduplicados y ordenados por score.
+    """
+    total = max(4, min(total, 20))
+    mx_needed = ceil(total * 0.6)
+    gl_needed = total - mx_needed
+
+    # MX queries: usar bloque 5 + boosters de controversia
+    mx_topics = CATEGORY_BLOCKS[4]
+    mx_q = f"({ ' OR '.join(mx_topics) }) (México OR Mexico OR CDMX OR Banxico OR CNBV) (fraude OR multa OR ciberataque OR reforma OR inflación OR tasas)"
+    mx_domains = "elfinanciero.com.mx,expansion.mx,forbes.com.mx,eleconomista.com.mx,animalpolitico.com,aristeguinoticias.com"
+    mx_articles = _newsapi_query(mx_q, "es", page_size=mx_needed * 2, domains=mx_domains)
+
+    # Global queries (no MX) desde bloques 1-4
+    non_mx_blocks = CATEGORY_BLOCKS[:4]
+    gl_topics = random.choice(non_mx_blocks)
+    gl_q = f"({ ' OR '.join(gl_topics) }) (fraud OR lawsuit OR breach OR regulation OR layoff OR controversy)"
+    gl_articles = _newsapi_query(gl_q, "en", page_size=gl_needed * 2)
+
+    # Mezclar, deduplicar por URL
+    seen = set()
+    combined = []
+    for art in (mx_articles + gl_articles):
+        url = art.get("url")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        combined.append(art)
+
+    # Rankear por score combinado y recortar al total
+    combined.sort(key=_rank_score, reverse=True)
+    selected = combined[:total]
+    logger.info(f"fetch_news_biased seleccionó {len(selected)} artículos (MX~{mx_needed}, GL~{gl_needed}).")
+    return selected
+
 def select_category():
     """
-    Selecciona una categoría pseudo‑aleatoria basada en el día de la semana.
-    L‑V: cada día corresponde a uno de los 5 bloques; S‑D elige bloque al azar.
+    Selecciona una categoría con sesgo hacia México (bloque 5).
+    ~60% de probabilidad: elegir del bloque 5 (Economía/FinTech MX).
+    ~40% restante: rotación por día laboral; fines de semana al azar.
     """
     day_of_week = datetime.now().weekday()  # Monday = 0 … Sunday = 6
+    # 60% de probabilidad de elegir el bloque 5 (índice 4)
+    if random.random() < 0.6:
+        block = CATEGORY_BLOCKS[4]
+        return random.choice(block)
+
     if day_of_week < 5:
         block_index = day_of_week
     else:
@@ -170,7 +256,11 @@ def fetch_news():
     # Detect if topic is explicitly about Mexico/FinTech MX
     is_mexico_topic = ("MX" in category) or ("México" in category) or ("Mexico" in category)
     language = "es" if is_mexico_topic else "en"
-    query = f"{category}" if not is_mexico_topic else f"{category} OR México OR Mexico"
+    query = (
+        f"{category}"
+        if not is_mexico_topic
+        else f"{category} OR México OR Mexico OR CDMX OR Banxico OR CNBV"
+    )
 
     params = {
         "q": query,
@@ -395,6 +485,7 @@ def post_to_linkedin_poll(commentary: str, poll_question: str, poll_options: Lis
     res = requests.post(url, headers=headers, json=payload)
     if res.status_code == 201:
         logger.info("Encuesta publicada con éxito ✅")
+        logger.info(f"Opciones publicadas: {[o['text'] for o in payload['content']['poll']['options']]}")
     else:
         logger.error(f"Error publicando encuesta: {res.status_code} {res.text}")
 
@@ -430,70 +521,72 @@ def post_to_linkedin_shares(content, image_url=None):
         logger.error(f"Error al publicar en LinkedIn (Shares): {response.status_code} {response.text}")
 
 def main():
-    articles = fetch_news()
+    articles = fetch_news_biased(TOTAL_ARTICLES)
     logger.info(f"Artículos obtenidos: {len(articles) if articles else 0}")
     if not articles:
         return
 
-    processed = []  # list of tuples (score, article, summary, image_info)
+    processed = []  # list of tuples (score, article, summary)
     for art in articles:
         if is_already_published(art["url"]):
             logger.info(f"Artículo ya publicado, se omite: {art['url']}")
             continue
         summary = summarize_and_rewrite(art)
         score = controversy_score(art)
-        img_info = fetch_image_for_article(art)
-        processed.append((score, art, summary, img_info))
+        processed.append((score, art, summary))
 
     if not processed:
         return
 
-    # Selecciona SIEMPRE el primer artículo para convertirlo en carrusel PDF (config temporal)
-    carousel_tuple = processed[0]
-    carousel_art = carousel_tuple[1]
-
-    num_polls = len(processed) // 2
-    poll_candidates = random.sample(processed, num_polls) if len(processed) > 1 else []
-
-    for score, art, summary, img_info in processed:
+    # Publicar **todas** las noticias como encuesta (poll)
+    for score, art, summary in processed:
         content = f"{summary}\n\nFuente 👉 {art['url']}"
-        author_credit = (
-            f"\n📸 Imagen de {img_info['author_name']} vía Unsplash"
-            if img_info and img_info.get("author_name") else ""
-        )
-        if (score, art, summary, img_info) in poll_candidates:
-            poll_question, poll_options = generate_dynamic_poll(summary)
-            post_to_linkedin_poll(content + author_credit, poll_question, poll_options)
-            mark_as_published(art["url"])
-            continue
-        if art == carousel_art:
-            # Construir y publicar carrusel PDF
-            try:
-                slides = generate_slides(summary)
-                pdf_bytes = build_pdf(slides)
-                asset = register_pdf_asset(pdf_bytes)
-                post_document(asset, content + author_credit)
-            except Exception as e:
-                logger.error(f"Fallo carrusel, publico share tradicional: {e}")
-                img_url = img_info.get("image_url") if img_info else None
-                post_to_linkedin_shares(content + author_credit, image_url=img_url)
-        else:
-            # Publica share normal
-            img_url = img_info.get("image_url") if img_info else None
-            post_to_linkedin_shares(content + author_credit, image_url=img_url)
-
+        question, options = generate_dynamic_poll(summary)
+        options = _sanitize_poll_options(options)
+        post_to_linkedin_poll(content, question, options)
         mark_as_published(art["url"])
+
+
+# --- Helper: Sanitiza opciones de encuesta a 2–3 palabras ---
+def _sanitize_poll_options(options: List[str]) -> List[str]:
+    """Recorta cada opción a 2–3 palabras (sin signos extras) y elimina vacíos."""
+    sanitized = []
+    for opt in options:
+        # Quitar espacios duplicados y caracteres no deseados al principio/fin
+        text = re.sub(r"\s+", " ", str(opt)).strip()
+        words = text.split()
+        if not words:
+            continue
+        # Asegurar 2–3 palabras: tomar máximo 3; si solo hay 1, mantener 1 pero intentaremos complementarla abajo
+        words = words[:3]
+        text = " ".join(words)
+        sanitized.append(text)
+    # Si alguna quedó con 1 palabra, intentar alargar a 2 usando adiciones neutras
+    fixed = []
+    for t in sanitized:
+        if len(t.split()) == 1:
+            fixed.append(f"{t} ✔️")  # añade un marcador corto para llegar a 2 tokens visibles
+        else:
+            fixed.append(t)
+    # Mantener máximo 4 opciones, únicas y no vacías
+    out = []
+    for t in fixed:
+        if t and t not in out:
+            out.append(t)
+        if len(out) == 4:
+            break
+    return out
 
 def generate_dynamic_poll(summary: str) -> tuple[str, List[str]]:
     """
-    Usa OpenAI para generar una pregunta provocadora tipo encuesta y 4 opciones de respuesta.
+    Usa OpenAI para generar una pregunta provocadora tipo encuesta y 4 opciones (2–3 palabras c/u).
     """
     prompt = (
         "Eres un estratega de contenido para LinkedIn con enfoque en noticias tech, economía y controversias actuales. "
         "Dado el siguiente resumen de una noticia, genera una pregunta provocadora tipo encuesta para la audiencia profesional latinoamericana. "
         "La pregunta debe invitar al debate o a la reflexión.\n\n"
-        "➡️ Usa un tono informal, profesional y que conecte con millennials y Gen Z. Incluye 1 o 2 emojis si ayudan a reforzar el tono o mensaje.\n"
-        "➡️ Las 4 opciones de respuesta deben ser breves, claras, distintas entre sí, y sin repetir sí/no obvios. Pueden tener un toque irónico, directo o picante.\n\n"
+        "➡️ Tono informal, profesional, con 1–2 emojis si ayudan.\n"
+        "➡️ Devuelve EXACTAMENTE 4 opciones, cada una de 2 a 3 palabras (no más), claras y distintas; evita 'Sí/No'.\n\n"
         "Formato de salida estrictamente en JSON como este:\n"
         "{\n"
         "  \"question\": \"¿Cuál es tu opinión sobre X?\",\n"
@@ -511,13 +604,20 @@ def generate_dynamic_poll(summary: str) -> tuple[str, List[str]]:
         )
         poll_data = _json.loads(res.choices[0].message.content)
         question = poll_data.get("question", "¿Qué opinas sobre esta noticia?")
-        options = poll_data.get("options", ["Interesante", "Preocupante", "Exagerado", "Necesita más contexto"])
+        options = poll_data.get("options", ["Interesante tema", "Preocupa impacto", "Exagerado quizá", "Falta contexto"]) 
+        options = _sanitize_poll_options(options)
+        # Relleno de respaldo si vienen menos de 4
+        defaults = ["Interesa mucho", "Me preocupa", "Exagerado", "Más contexto"]
+        i = 0
+        while len(options) < 4 and i < len(defaults):
+            options.append(defaults[i])
+            i += 1
         return question, options
     except Exception as e:
         logger.error(f"Error generando encuesta dinámica con OpenAI: {e}")
         return (
             "¿Qué opinas sobre esta noticia?",
-            ["Interesante", "Preocupante", "Exagerado", "Necesita más contexto"]
+            ["Interesa mucho", "Me preocupa", "Exagerado", "Más contexto"]
         )
 
 def lambda_handler(event, context):
