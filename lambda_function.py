@@ -14,7 +14,6 @@ from fpdf import FPDF
 # Cargar variables de entorno desde .env (para desarrollo local)
 load_dotenv()
 
-# Obtener claves y tokens desde variables de entorno
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LINKEDIN_ACCESS_TOKEN = os.environ.get("LINKEDIN_ACCESS_TOKEN")
@@ -30,16 +29,106 @@ logger = logging.getLogger(__name__)
 
 # Archivo temporal para artículos publicados en Lambda
 PUBLISHED_ARTICLES_FILE = "/tmp/published_articles.txt"
+LAST_CATEGORY_FILE = "/tmp/last_category.txt"
 
-def is_already_published(url):
+HISTORY_FILE = "/tmp/published_history.jsonl"
+HISTORY_DAYS = int(os.environ.get("HISTORY_DAYS", "7"))
+
+STOPWORDS = set(
+    "a al algo algunas algunos ante antes como con contra de del desde donde dos el la los las en entre es esa ese eso esta este esto hacia hay hasta la las lo los mas más me mi mis muy no o para pero por que se sin sobre su sus te tu tus un una uno y ya son fue ser si sí".split()
+)
+
+def _read_local_published() -> set:
     if not os.path.exists(PUBLISHED_ARTICLES_FILE):
-        return False
+        return set()
     with open(PUBLISHED_ARTICLES_FILE, "r") as f:
-        return url.strip() in [line.strip() for line in f.readlines()]
+        return set(line.strip() for line in f.readlines() if line.strip())
 
-def mark_as_published(url):
+def _append_local_published(url: str) -> None:
     with open(PUBLISHED_ARTICLES_FILE, "a") as f:
         f.write(url.strip() + "\n")
+
+def _load_history() -> list:
+    records = []
+    if not os.path.exists(HISTORY_FILE):
+        return records
+    with open(HISTORY_FILE, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except Exception:
+                continue
+    return records
+
+def _save_history(records: list) -> None:
+    with open(HISTORY_FILE, "w") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+def _prune_history(days: int = HISTORY_DAYS) -> list:
+    now = datetime.utcnow()
+    keep = []
+    for r in _load_history():
+        try:
+            ts = datetime.fromisoformat(r.get("ts", ""))
+        except Exception:
+            # If parsing fails, keep a couple of days as safety
+            continue
+        if (now - ts).days <= days:
+            keep.append(r)
+    _save_history(keep)
+    return keep
+
+def _norm_tokens(s: str) -> set:
+    s = re.sub(r"[^\wáéíóúñÁÉÍÓÚÑ]+", " ", (s or "").lower())
+    tokens = [t for t in s.split() if t and t not in STOPWORDS]
+    return set(tokens)
+
+def _jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+def _normalize_text(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip().lower()
+
+def is_already_published(url: str, title: str = "") -> bool:
+    url = (url or "").strip()
+    if not url:
+        return False
+    # direct URL check
+    if url in _read_local_published():
+        return True
+    # heuristic: similar title in recent history
+    title_tokens = _norm_tokens(title)
+    history = _prune_history(HISTORY_DAYS)
+    for r in history:
+        if url == r.get("url"):
+            return True
+        sim = _jaccard(title_tokens, set(r.get("title_tokens", [])))
+        if sim >= 0.8:  # very similar title
+            return True
+    return False
+
+def mark_as_published(url: str, title: str = "") -> None:
+    url = (url or "").strip()
+    if not url:
+        return
+    _append_local_published(url)
+    rec = {
+        "ts": datetime.utcnow().isoformat(timespec="seconds"),
+        "url": url,
+        "title_norm": _normalize_text(title),
+        "title_tokens": sorted(list(_norm_tokens(title)))
+    }
+    history = _prune_history(HISTORY_DAYS)
+    history.append(rec)
+    _save_history(history)
 
 # Rotación temática semanal de bloques (5 bloques, uno por día laboral)
 CATEGORY_BLOCKS = [
@@ -161,17 +250,23 @@ PRO_INTEREST_MX = [
 # --- NewsAPI biased fetch: MX/global, dedup, controversy/interest rank ---
 from math import ceil
 
-def _newsapi_query(query: str, language: str, page_size: int, domains: Optional[str] = None):
+def _newsapi_query(query: str, language: str, page_size: int, domains: Optional[str] = None, page: int = 1, since_hours: int = 48, sort_by: str = "relevancy"):
     url = "https://newsapi.org/v2/everything"
     params = {
         "q": query,
         "language": language,
-        "sortBy": "relevancy",
+        "sortBy": sort_by,
         "apiKey": NEWSAPI_KEY,
-        "pageSize": page_size
+        "pageSize": page_size,
+        "page": page
     }
     if domains:
         params["domains"] = domains
+    # Date window: from now minus since_hours
+    now = datetime.utcnow()
+    from_dt = now - timedelta(hours=since_hours)
+    params["from"] = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    params["to"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     resp = requests.get(url, params=params)
     if resp.status_code != 200:
         logger.error(f"NewsAPI error {resp.status_code}: {resp.text}")
@@ -188,6 +283,8 @@ def _rank_score(article: dict) -> int:
     return c * 2 + min(bonus, 3)  # dar más peso a controversia
 
 
+from datetime import timedelta
+
 def fetch_news_biased(total: int = TOTAL_ARTICLES):
     """Obtiene un set mixto garantizando ~60% MX y ~40% global, priorizando temas polémicos para profesionistas.
     Devuelve lista de artículos (dict) deduplicados y ordenados por score.
@@ -196,17 +293,22 @@ def fetch_news_biased(total: int = TOTAL_ARTICLES):
     mx_needed = ceil(total * 0.6)
     gl_needed = total - mx_needed
 
+    # Variability for NewsAPI params
+    since_hours = random.choice([24, 36, 48, 72])
+    sort_by = random.choice(["publishedAt", "relevancy"])
+    interest_seed = random.choice(PRO_INTEREST_MX)
+
     # MX queries: usar bloque 5 + boosters de controversia
     mx_topics = CATEGORY_BLOCKS[4]
-    mx_q = f"({ ' OR '.join(mx_topics) }) (México OR Mexico OR CDMX OR Banxico OR CNBV) (fraude OR multa OR ciberataque OR reforma OR inflación OR tasas)"
+    mx_q = f"({ ' OR '.join(mx_topics) }) (México OR Mexico OR CDMX OR Banxico OR CNBV) (fraude OR multa OR ciberataque OR reforma OR inflación OR tasas OR {interest_seed})"
     mx_domains = "elfinanciero.com.mx,expansion.mx,forbes.com.mx,eleconomista.com.mx,animalpolitico.com,aristeguinoticias.com"
-    mx_articles = _newsapi_query(mx_q, "es", page_size=mx_needed * 2, domains=mx_domains)
+    mx_articles = _newsapi_query(mx_q, "es", page_size=mx_needed * 2, domains=mx_domains, since_hours=since_hours, sort_by=sort_by)
 
     # Global queries (no MX) desde bloques 1-4
     non_mx_blocks = CATEGORY_BLOCKS[:4]
     gl_topics = random.choice(non_mx_blocks)
-    gl_q = f"({ ' OR '.join(gl_topics) }) (fraud OR lawsuit OR breach OR regulation OR layoff OR controversy)"
-    gl_articles = _newsapi_query(gl_q, "en", page_size=gl_needed * 2)
+    gl_q = f"({ ' OR '.join(gl_topics) }) (fraud OR lawsuit OR breach OR regulation OR layoff OR controversy OR {interest_seed})"
+    gl_articles = _newsapi_query(gl_q, "en", page_size=gl_needed * 2, since_hours=since_hours, sort_by=sort_by)
 
     # Mezclar, deduplicar por URL
     seen = set()
@@ -251,8 +353,6 @@ def fetch_news():
     """
     category = select_category()
     logger.info(f"Categoría seleccionada para hoy: {category}")
-    url = "https://newsapi.org/v2/everything"
-
     # Detect if topic is explicitly about Mexico/FinTech MX
     is_mexico_topic = ("MX" in category) or ("México" in category) or ("Mexico" in category)
     language = "es" if is_mexico_topic else "en"
@@ -261,29 +361,21 @@ def fetch_news():
         if not is_mexico_topic
         else f"{category} OR México OR Mexico OR CDMX OR Banxico OR CNBV"
     )
-
-    params = {
-        "q": query,
-        "language": language,
-        "sortBy": "relevancy",
-        "apiKey": NEWSAPI_KEY,
-        "pageSize": 5
-    }
-
-    # Prioritize Mexican financial outlets when relevant
+    since_hours = random.choice([24, 36, 48, 72])
+    sort_by = random.choice(["publishedAt", "relevancy"])
     MX_DOMAINS = "elfinanciero.com.mx,expansion.mx,forbes.com.mx,eleconomista.com.mx"
-    if is_mexico_topic:
-        params["domains"] = MX_DOMAINS
-
-    response = requests.get(url, params=params)
-    if response.status_code == 200:
-        data = response.json()
-        articles = data.get("articles", [])
-        logger.info(f"Se encontraron {len(articles)} artículos para la categoría {category}.")
-        return articles
-    else:
-        logger.error(f"Error al obtener noticias: {response.status_code} {response.text}")
-        return []
+    articles = _newsapi_query(
+        query,
+        language,
+        page_size=20,
+        domains=MX_DOMAINS if is_mexico_topic else None,
+        page=1,
+        since_hours=since_hours,
+        sort_by=sort_by
+    )
+    # Deduplicate per domain cap (original code may have more, but keep logic as before)
+    logger.info(f"Se encontraron {len(articles)} artículos para la categoría {category}.")
+    return articles
 
 def fetch_image_for_article(article):
     """
@@ -528,7 +620,7 @@ def main():
 
     processed = []  # list of tuples (score, article, summary)
     for art in articles:
-        if is_already_published(art["url"]):
+        if is_already_published(art.get("url", ""), art.get("title", "")):
             logger.info(f"Artículo ya publicado, se omite: {art['url']}")
             continue
         summary = summarize_and_rewrite(art)
@@ -544,7 +636,7 @@ def main():
         question, options = generate_dynamic_poll(summary)
         options = _sanitize_poll_options(options)
         post_to_linkedin_poll(content, question, options)
-        mark_as_published(art["url"])
+        mark_as_published(art["url"], art.get("title", ""))
 
 
 # --- Helper: Sanitiza opciones de encuesta a 2–3 palabras ---
