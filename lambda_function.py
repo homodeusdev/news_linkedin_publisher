@@ -36,7 +36,10 @@ if missing:
 
 
 # Configuración de logging
-logging.basicConfig(level=logging.INFO)
+# Asegurarse de que los logs INFO se muestren en AWS Lambda (reconfigurar handlers existentes)
+logging.basicConfig(level=logging.INFO, force=True)
+# Establecer explícitamente el nivel del logger raíz a INFO
+logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Archivo temporal para artículos publicados en Lambda
@@ -760,6 +763,8 @@ def generate_dynamic_poll(summary: str) -> tuple[str, List[str]]:
         )
 
 def lambda_handler(event, context):
+    # Log de inicio de la función Lambda
+    logger.info("Lambda handler invoked: inicio de ejecución.")
     main()
     return {
         "statusCode": 200,
