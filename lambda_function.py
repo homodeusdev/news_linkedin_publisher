@@ -1,9 +1,10 @@
 import os
+import sys
 import requests
 import openai
 import logging
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 import json
 import re
@@ -13,6 +14,9 @@ from fpdf import FPDF
 
 # Cargar variables de entorno desde .env (para desarrollo local)
 load_dotenv()
+# Configuración de sesión HTTP y timeout por defecto
+HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT", "10"))
+session = requests.Session()
 
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -20,7 +24,15 @@ LINKEDIN_ACCESS_TOKEN = os.environ.get("LINKEDIN_ACCESS_TOKEN")
 LINKEDIN_PERSON_ID = os.environ.get("LINKEDIN_PERSON_ID")
 TOTAL_ARTICLES = int(os.environ.get("TOTAL_ARTICLES", "8"))  # cantidad objetivo por corrida
 
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+# Unificar clave de OpenAI
+openai.api_key = OPENAI_API_KEY
+# Validar variables de entorno requeridas
+required_env = ["NEWSAPI_KEY", "OPENAI_API_KEY", "LINKEDIN_ACCESS_TOKEN", "LINKEDIN_PERSON_ID"]
+missing = [v for v in required_env if not os.environ.get(v)]
+if missing:
+    logger = logging.getLogger(__name__)
+    logger.error("Faltan variables de entorno requeridas: %s", missing)
+    sys.exit(1)
 
 
 # Configuración de logging
@@ -267,11 +279,14 @@ def _newsapi_query(query: str, language: str, page_size: int, domains: Optional[
     from_dt = now - timedelta(hours=since_hours)
     params["from"] = from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     params["to"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    resp = requests.get(url, params=params)
-    if resp.status_code != 200:
-        logger.error(f"NewsAPI error {resp.status_code}: {resp.text}")
+    try:
+        resp = session.get(url, params=params, timeout=HTTP_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("articles", [])
+    except Exception as e:
+        logger.error("NewsAPI request failed: %s", e)
         return []
-    return resp.json().get("articles", [])
 
 
 def _rank_score(article: dict) -> int:
@@ -519,12 +534,30 @@ def register_pdf_asset(pdf_bytes: bytes) -> str:
             "supportedUploadMechanism": ["SYNCHRONOUS_UPLOAD"]
         }
     }
-    res = requests.post(url, headers=headers, json=payload).json()
-    upload_url = res["value"]["uploadMechanism"]["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]["uploadUrl"]
-    asset_urn = res["value"]["asset"]
-    up_headers = {"Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
-                  "Content-Type": "application/pdf"}
-    requests.put(upload_url, headers=up_headers, data=pdf_bytes).raise_for_status()
+    # Registrar asset en LinkedIn
+    try:
+        r = session.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
+        res = r.json()
+        upload_info = res.get("value", {})
+        upload_url = upload_info.get("uploadMechanism", {}) \
+            .get("com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest", {}) \
+            .get("uploadUrl")
+        asset_urn = upload_info.get("asset")
+    except Exception as e:
+        logger.error("Error registrando asset PDF en LinkedIn: %s", e)
+        raise
+    # Subir documento PDF
+    up_headers = {
+        "Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
+        "Content-Type": "application/pdf"
+    }
+    try:
+        r2 = session.put(upload_url, headers=up_headers, data=pdf_bytes, timeout=HTTP_TIMEOUT)
+        r2.raise_for_status()
+    except Exception as e:
+        logger.error("Error subiendo PDF a LinkedIn: %s", e)
+        raise
     return asset_urn
 
 def post_document(asset_urn: str, commentary: str):
@@ -542,11 +575,15 @@ def post_document(asset_urn: str, commentary: str):
         "lifecycleState": "PUBLISHED",
         "content": {"document": {"asset": asset_urn}}
     }
-    res = requests.post(url, headers=headers, json=payload)
-    if res.status_code == 201:
+    try:
+        r = session.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
         logger.info("Carrusel PDF publicado con éxito ✅")
-    else:
-        logger.error(f"Error publicando carrusel: {res.status_code} {res.text}")
+    except Exception as e:
+        code = getattr(r, "status_code", None) if 'r' in locals() else None
+        text = getattr(r, "text", None) if 'r' in locals() else None
+        logger.error("Error publicando carrusel: %s %s %s", code, text, e)
+        raise
 
 def post_to_linkedin_poll(commentary: str, poll_question: str, poll_options: List[str]):
     url = "https://api.linkedin.com/rest/posts"
@@ -574,12 +611,16 @@ def post_to_linkedin_poll(commentary: str, poll_question: str, poll_options: Lis
             }
         }
     }
-    res = requests.post(url, headers=headers, json=payload)
-    if res.status_code == 201:
+    try:
+        r = session.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
         logger.info("Encuesta publicada con éxito ✅")
-        logger.info(f"Opciones publicadas: {[o['text'] for o in payload['content']['poll']['options']]}")
-    else:
-        logger.error(f"Error publicando encuesta: {res.status_code} {res.text}")
+        logger.info("Opciones publicadas: %s", [o['text'] for o in payload['content']['poll']['options']])
+    except Exception as e:
+        code = getattr(r, "status_code", None) if 'r' in locals() else None
+        text = getattr(r, "text", None) if 'r' in locals() else None
+        logger.error("Error publicando encuesta: %s %s %s", code, text, e)
+        raise
 
 def post_to_linkedin_shares(content, image_url=None):
     logger.info(f"Preparando publicación: {content[:100]}...")
@@ -587,7 +628,9 @@ def post_to_linkedin_shares(content, image_url=None):
     url = "https://api.linkedin.com/v2/shares"
     headers = {
         "Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "LinkedIn-Version": "202506",
+        "X-Restli-Protocol-Version": "2.0.0"
     }
     payload = {
         "owner": f"urn:li:person:{LINKEDIN_PERSON_ID}",
@@ -606,11 +649,15 @@ def post_to_linkedin_shares(content, image_url=None):
             "title": "Imagen relacionada"
         }
 
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 201:
-        logger.info("Publicación en LinkedIn (Shares) realizada con éxito ✅.")
-    else:
-        logger.error(f"Error al publicar en LinkedIn (Shares): {response.status_code} {response.text}")
+    try:
+        r = session.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
+        logger.info("Publicación en LinkedIn (Shares) realizada con éxito ✅")
+    except Exception as e:
+        code = getattr(r, "status_code", None) if 'r' in locals() else None
+        text = getattr(r, "text", None) if 'r' in locals() else None
+        logger.error("Error al publicar en LinkedIn (Shares): %s %s %s", code, text, e)
+        raise
 
 def main():
     articles = fetch_news_biased(TOTAL_ARTICLES)
